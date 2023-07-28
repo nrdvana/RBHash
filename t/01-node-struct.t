@@ -4,7 +4,7 @@ use FindBin;
 use lib "$FindBin::RealBin/lib";
 use LocalTestUtil;
 use Config;
-use Lang::Generate::RedBlackTree::C;
+use CodeGen::RedBlackTree::C;
 
 my @tests= (
    [ 'default', { size_size => $Config{sizesize} }, <<~C ],
@@ -18,6 +18,10 @@ my @tests= (
      size_t         color : 1;
      size_t         count : @{[ $Config{sizesize} *8 - 1 ]};
    };
+   struct rbtree_tree {
+     struct rbtree_node root_sentinel, leaf_sentinel;
+   };
+   typedef struct rbtree_tree rbtree_tree_t;
    C
    [ 'at_offset', { size_size => $Config{sizesize}, node_offset => 'node' }, <<~C ],
    struct rbtree_node;
@@ -29,6 +33,10 @@ my @tests= (
      size_t         color : 1;
      size_t         count : @{[ $Config{sizesize} *8 - 1 ]};
    };
+   struct rbtree_tree {
+     struct rbtree_node root_sentinel, leaf_sentinel;
+   };
+   typedef struct rbtree_tree rbtree_tree_t;
    C
    [ 'no_count_cust_name_int_key', {
          size_size => $Config{sizesize},
@@ -47,13 +55,17 @@ my @tests= (
      size_t    color : 1;
      int       key;
    };
+   struct rbtree_tree {
+     struct rbtree_node root_sentinel, leaf_sentinel;
+   };
+   typedef struct rbtree_tree rbtree_tree_t;
    C
 );
 
 for (@tests) {
    my ($name, $opts, $expected)= @$_;
-   my $rbgen= Lang::Generate::RedBlackTree::C->new($opts);
-   is( $rbgen->_node_type_decl, $expected, $name );
+   my $rbgen= CodeGen::RedBlackTree::C->new($opts);
+   is( scalar $rbgen->generate_node_struct, $expected, $name );
 }
 
 done_testing;
