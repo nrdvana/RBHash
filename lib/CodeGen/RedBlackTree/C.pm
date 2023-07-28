@@ -44,6 +44,18 @@ sub new {
    for (keys %args) {
       $class->can($_) or croak "Invalid attribute $_";
    }
+   if (defined $args{cmp} && !defined $args{key_type}) {
+      if ($args{cmp} =~ /int/) {
+         $args{key_type}= $args{cmp};
+         $args{cmp}= 'numeric';
+      } elsif ($args{cmp} =~ /^(numeric|relative)$/) {
+         $args{key_type}= 'double';
+      } elsif ($args{cmp} =~ /str.*cmp/) {
+         $args{key_type}= 'const char *';
+      } elsif ($args{cmp} ne 'callback') {
+         croak "key_type must be defined when cmp is '$args{cmp}'";
+      }
+   }
    bless \%args, $class;
 }
 
@@ -62,6 +74,10 @@ The algorithm that will be sued for comparing nodes to determine their sort orde
 =item numeric
 
 Numeric comparison of keys using "<" and ">" operators.
+
+=item C<< /int/ >>
+
+Alias for 'numeric' that sets key_type at the same time.
 
 =item relative
 
@@ -95,60 +111,71 @@ is found in the user data.
 
 sub namespace      { $_[0]{namespace} || 'rbtree_' }
 sub cmp            { $_[0]{cmp} || 'callback' }
-sub key_type       { $_[0]{key_type} || undef }
+sub key_type       { $_[0]{key_type} }
+
+=head2 tree_type
+
+Type name for the tree struct.  This can be C<< struct ${namespace}tree >>,
+or a typedef for the struct like C<< ${namespace}tree_t >>.  If you want to use a typedef
+for I<a pointer to> the struct, prefix this attribute with '*'.
+
+=head2 tree_struct
+
+Type name for the struct underlying the L</tree_type>.  You can initialize this to whatever
+you like, else it defaults to something sensible.
 
 =head2 node_type
 
-The type name of the red/black node, C<< ${namespace}_node_t >> by default.
-If it starts with C<"struct "> literal struct types will be used throughout,
-else it will be declared as a typedef for the struct.
+The type name of the red/black node.  This can be C<< struct ${namespace}tree >> to use
+struct types throughout, or a typedef for the struct like C<< ${namespace}tree_t >>.
+If you want to use a typedef for I<a pointer to> the struct, prefix this attribute with '*'.
+
+=head2 node_struct
+
+Type name for the struct underlying the L</node_type>.  You can initialize this to whatever
+you like, else it defaults to something sensible.
 
 =head2 node_data_type
 
 The type name of user-data the node references.  This must be a pointer.
 The default is C<< void* >>, resulting in generic code that you can cast as needed.
 
-=head2 node_offset
-
-This enables the option of using a red/black node that is contained within a larger struct at
-a known offset.  (The pointers in the R/B node still point to other inner nodes rather than
-the outer struct)  Set this attribute to a byte offset, or a field name of C<node_data_type>.
-
-Example:
-
-  struct my_struct {
-    ...
-    rbtree_node_t node;
-    ...
-  };
-
-  #  node_data_type => 'struct my_struct'
-  #  node_offset    => 'node',
-
-When using this feature, L</node_field_data> is unused, shrinking the node struct by one pointer.
-
 =head2 node_fields
 
 This is a hashref for overriding the names of the fields within the node.
 
-  {                # typedef struct rbtree_node {
-    left   => ..., #   struct rbtree_node * ${node_fields}{left};
-    right  => ..., #   struct rbtree_node * ${node_fields}{right};
-    parent => ..., #   struct rbtree_node * ${node_fields}{parent};
-    color  => ..., #   size_t ${node_fields}{color} : 1;
-    count  => ..., #   size_t ${node_fields}{count} : ${size_t_bits_minus_one};
-    key    => ..., #   ${key_type} ${node_fields}{key};
-    data   => ..., #   ${node_data_type} ${node_fields}{data};
-  }                # } ${node_type};
+  {
+    left   => ..., # left subtree
+    right  => ..., # right subtree
+    parent => ..., # subtree parent, only used if with_parent enabled
+    color  => ..., # red/black (1/0), used unless with_packed_color specified
+    count  => ..., # number of nodes in subtree, if with_count feature enabled
+    key    => ..., # key or pointer to key, if key_type declared
+    data   => ..., # pointer to user data, present if with_data_pointer feature enabled
+  }
 
-Note that if you use the 'count' feature, you can declare it as 
+You can call this as a method with a list of field names, and it returns that same
+list with any overrides applied.
+
+  my ($left, $right, $parent)= $self->node_fields(qw( left right parent ));
 
 =cut
 
 sub tree_type         { $_[0]{tree_type} || undef }
+sub tree_struct($self) {
+   $self->{tree_struct}? $self->{tree_struct}
+   : ($self->tree_type//'') =~ /^struct (\w+)/? $1
+   : $self->namespace . 'tree'
+}
+
 sub node_type         { $_[0]{node_type} || undef }
+sub node_struct($self) {
+   $self->{node_struct}? $self->{node_struct}
+   : ($self->node_type//'') =~ /^struct (\w+)/? $1
+   : $self->namespace . 'node';
+}
+
 sub node_data_type    { $_[0]{node_data_type} || undef }
-sub node_offset       { $_[0]{node_offset} // undef }
 sub node_fields($self, @list) {
    @list? (map +($self->{node_fields}{$_} // $_), @list)
    : ($self->{node_fields})
@@ -167,6 +194,11 @@ enables many useful features like efficient duplicate key handling and relative 
 Include a count of sub-nodes on each node, which allows you to find the Nth node in the tree
 in O(log(n)) time.  This comes at a very small performance cost when modifying the tree
 
+=head2 with_data_pointer
+
+Whether to include a pointer to user data within the node.  The default is true.  If set to
+false, it is assumed you will use pointer math to reach the user data from the node pointer.
+
 =head2 with_packed_color
 
 Store the color bit inside the 'right' pointer, instead of giving it its own field.  This
@@ -182,16 +214,17 @@ If false, all public API will be compiled as normal extern functions.
 
 sub with_parent       { $_[0]{with_parent} // 1 }
 sub with_count        { $_[0]{with_count} // 1 }
-sub with_packed_color { $_[0]{with_packed_color} // 0 }
+sub with_data_pointer { $_[0]{with_data_pointer} // 1 }
+sub with_packed_color { $_[0]{with_packed_color} }
 sub with_inline       { $_[0]{with_inline} // 1 }
 
-=head2 public_fn_prefix
+=head2 public_api_decl
 
 C declaration of Calling API for public functions.  Defaults to 'extern'.
 
 =cut
 
-sub public_fn_prefix { $_[0]{public_fn_prefix} // 'extern' }
+sub public_api_decl { $_[0]{public_api_decl} // 'extern' }
 
 =head2 src_h
 
@@ -208,23 +241,32 @@ as an arrayref.
 sub src_h             { $_[0]{src_h} ||= [] }
 sub src_c             { $_[0]{src_c} ||= [] }
 
+sub _gen_result($self, $h, $c) {
+   if (!defined wantarray) {
+      push $self->src_h->@*, $h if length $h;
+      push $self->src_c->@*, $c if length $c;
+   } else {
+      return wantarray? ($h, $c) : $h.$c;
+   }
+}
+
 =head1 METHODS
 
 =head2 generate_node_struct
 
-Generate the R/B Tree Node struct (and typedef)
+Generate the R/B Tree and Node structs (and typedefs)
 
 =cut
 
 sub _node_pointer_type($self) {
    my $typename= $self->node_type || $self->namespace . 'node_t';
    # If starts with '*', then it is a typedef that already indicates a pointer.
-   return $typename =~ /^[*]/? $typename : $typename . '*';
+   return $typename =~ /^[*]/? substr($typename,1) : $typename . '*';
 }
 
 sub _tree_pointer_type($self) {
    my $typename= $self->tree_type || $self->namespace . 'tree_t';
-   return $typename =~ /^[*]/? $typename : $typename . '*';
+   return $typename =~ /^[*]/? substr($typename,1) : $typename . '*';
 }
 
 sub _if($cond, @items) {
@@ -234,64 +276,101 @@ sub _pad_to_same_len {
    my $max= List::Util::max(map length, grep defined, @_);
    $_ .= ' 'x($max - length) for grep defined, @_;
 }
-sub _gen_result($self, $h, $c) {
-   if (!defined wantarray) {
-      push $self->src_h->@*, $h if length $h;
-      push $self->src_c->@*, $c if length $c;
-   } else {
-      return wantarray? ($h, $c) : $h.$c;
-   }
-}
+
 sub generate_node_struct($self) {
    my ($is_typedef, $struct_name, $typedef_varname);
+   my $ns= $self->namespace;
    my $node_ptr_t= $self->_node_pointer_type;
-   if ($node_ptr_t =~ /^struct (\w+)/) {
-      $is_typedef= 0;
-      $struct_name= $1;
-   } else {
-      $is_typedef= 1;
-      $struct_name= $self->namespace . 'node';
-      $typedef_varname= ($node_ptr_t =~ /[*]$/)
-         ? substr($node_ptr_t, 0, -1)
-         : '*'.$node_ptr_t;
-   }
-   my ($tree_is_typedef, $tree_struct_name, $tree_typedef_varname);
+   my $node_struct= $self->node_struct;
+   my $node_t= $node_ptr_t =~ /\*$/? substr($node_ptr_t, 0, -1) : 'struct '.$node_struct;
+   my $node_typedef= ($node_ptr_t =~ /^struct /)? undef
+      : ($node_ptr_t =~ /( *\*)$/)? substr($node_ptr_t, 0, -length $1)
+      : '*'.$node_ptr_t;
    my $tree_ptr_t= $self->_tree_pointer_type;
-   if ($tree_ptr_t =~ /^struct (\w+)/) {
-      $tree_is_typedef= 0;
-      $tree_struct_name= $1;
-   } else {
-      $tree_is_typedef= 1;
-      $tree_struct_name= $self->namespace . 'tree';
-      $tree_typedef_varname= ($tree_ptr_t =~ /[*]$/)
-         ? substr($tree_ptr_t, 0, -1)
-         : '*'.$tree_ptr_t;
-   }
-   my $key_t= $self->key_type;
+   my $tree_struct= $self->tree_struct;
+   my $tree_typedef= ($tree_ptr_t =~ /^struct /)? undef
+      : ($tree_ptr_t =~ /( *\*)$/)? substr($tree_ptr_t, 0, -length $1)
+      : '*'.$tree_ptr_t;
+   my $key_t= $self->key_type // '';
    my $data_t= $self->node_data_type // 'void*';
    my ($size_t, $size_sz)= ($self->size_type, $self->size_size);
-   my $has_data= !defined $self->node_offset;
    my ($left, $right, $parent, $data, $color, $count, $key)
       = $self->node_fields(qw( left right parent data color count key ));
+   # If key_t ends with a bit splice, move the splice onto the key field name
+   if ($key_t =~ /(.*?)(:\d+)/) {
+      $key .= $2;
+      $key_t= $1;
+   }
    _pad_to_same_len($size_t, $node_ptr_t, $key_t, $data_t, $key_t, $data_t);
    my $h= join "\n",
-      _if( $is_typedef,              "struct $struct_name;" ),
-      _if( $is_typedef,              "typedef struct $struct_name $typedef_varname;" ),
-                                     "struct $struct_name {",
-                                     "  $node_ptr_t $left;",
-                                     "  $node_ptr_t $right;",
-      _if( $self->with_parent,       "  $node_ptr_t $parent;" ),
-      _if( $has_data,                "  $data_t $data;" ),
-      _if( !$self->with_packed_color,"  $size_t $color : 1;" ),
-      _if( $self->with_count,        "  $size_t $count : @{[ $size_sz * 8 - 1 ]};" ),
-      _if( defined $self->key_type,  "  $key_t $key;" ),
-                                     "};",
-                                     "struct $tree_struct_name {",
-                                     "  struct $struct_name root_sentinel, leaf_sentinel;",
-                                     "};",
-      _if( $tree_is_typedef,         "typedef struct $tree_struct_name $tree_typedef_varname;" ),
+      _if( $node_typedef,              "struct $node_struct;",
+                                       "typedef struct $node_struct $node_typedef;" ),
+                                       "struct $node_struct {",
+                                       "   $node_ptr_t $left;",
+      _if( !$self->with_packed_color,  "   $node_ptr_t $right;" ),
+      _if( $self->with_packed_color,   "   uintptr_t $right; // LSB is 0=black, 1=red" ),
+      _if( $self->with_parent,         "   $node_ptr_t $parent;" ),
+      _if( $self->with_data_pointer,   "   $data_t $data; // pointer to user data" ),
+      _if( !$self->with_packed_color,  "   $size_t $color : 1; // black=0, red=1" ),
+      _if( $self->with_count,          "   $size_t $count : @{[ $size_sz * 8 - 1 ]}; // number of subnodes" ),
+      _if( defined $self->key_type,    "   $key_t $key;" ),
+                                       "};",
+      _if( $self->cmp eq 'callback',   "typedef int (*${ns}compare_fp)(void *context, void *key_a, void *key_b);" ),
+                                       "struct $tree_struct {",
+                                       "   $node_t root_sentinel; // parent node of root node of tree",
+                                       "   $node_t leaf_sentinel; // child node of all leaf nodes",
+      _if( !$self->with_data_pointer,  "   ptrdiff_t node_to_data_ofs; // offset from node to user-data" ),
+      _if( !defined $self->key_type,   "   ptrdiff_t data_to_key_ofs; // offset from user-data to key passed to callback" ),
+      _if( $self->cmp eq 'callback',   "   ${ns}compare_fp cmp; // compare two keys",
+                                       "   void* cmp_context;   // first argument passed to cmp" ),
+                                       "};",
+      _if( $tree_typedef,              "typedef struct $tree_struct $tree_typedef;" ),
       '';
    $self->_gen_result($h, '');
+}
+
+=head2 generate_init_tree
+
+This is the "constructor" of sorts.  It just initializes a tree struct which must be allocated
+by the caller.
+
+=cut
+
+sub generate_init_tree($self) {
+   my $api= $self->public_api_decl;
+   my $ns= $self->namespace;
+   my $np= $self->_node_pointer_type;
+   my $tp= $self->_tree_pointer_type;
+   my @args= ("$tp tree");
+   push @args, 'ptrdiff_t node_to_data' if !$self->with_data_pointer;
+   push @args, "ptrdiff_t data_to_key"  if !defined $self->key_type;
+   push @args, "${ns}compare_fp cmp",
+               "void* cmp_context"      if $self->cmp eq 'callback';
+   my $callback_args= join ', ', @args;
+   my $h= <<~C;
+      /* Initialize a tree. Caller manages object lifespan */
+      $api void ${ns}init_tree( $callback_args );
+      C
+   my $c= join "\n", <<~C,
+      void ${ns}init_tree( $callback_args ) {
+         SET_LEFT(&tree->root_sentinel, &tree->leaf_sentinel);
+         SET_RIGHT(&tree->root_sentinel, &tree->leaf_sentinel);
+         SET_COLOR_BLACK(&tree->root_sentinel);
+         SET_COUNT(&tree->root_sentinel, 0);
+         SET_PARENT(&tree->root_sentinel, NULL);
+         
+         SET_LEFT(&tree->leaf_sentinel, &tree->leaf_sentinel);
+         SET_RIGHT(&tree->leaf_sentinel, &tree->leaf_sentinel);
+         SET_COLOR_BLACK(&tree->leaf_sentinel);
+         SET_COUNT(&tree->leaf_sentinel, 0);
+         SET_PARENT(&tree->leaf_sentinel, &tree->leaf_sentinel);
+      C
+      _if( !$self->with_data_pointer,  "   tree->node_to_data_ofs= node_to_data;" ),
+      _if( defined $self->key_type,    "   tree->data_to_key_ofs= data_to_key;" ),
+      _if( $self->cmp eq 'callback',   "   tree->cmp= cmp;",
+                                       "   tree->cmp_context= cmp_context;" ),
+      "}\n";
+   $self->_gen_result($h, $c);
 }
 
 =head2 generate_implementation_macros
@@ -300,38 +379,48 @@ Generates macros that are only seen/used in the source file.
 
 =cut
 
+sub _c_node_right($self, $node='node') {
+   my $np= $self->_node_pointer_type;
+   my ($right)= $self->node_fields('right');
+   $self->with_packed_color? "(($np)(($node)->$right & ~(uintptr_t)1))"
+   : "(($node)->$right)"
+}
+
+sub _c_node_color($self, $node='node') {
+   my $np= $self->_node_pointer_type;
+   my ($right, $color)= $self->node_fields('right','color');
+   $self->with_packed_color? "(($node)->$right & 1)"
+   : "(($node)->$right)"
+}
+
 sub generate_implementation_macros($self) {
-   my ($left, $right, $color, $parent, $count)
-      = $self->node_fields(qw( left right color parent count ));
+   my ($left, $right, $color, $parent, $count, $data, $key)
+      = $self->node_fields(qw( left right color parent count data key ));
    my $np= $self->_node_pointer_type;
    my $c= <<~C;
       #define NODE_LEFT(node)                      ((node)->$left)
+      #define NODE_RIGHT(node)                     ${\ $self->_c_node_right }
+      #define NODE_COLOR(node)                     ${\ $self->_c_node_color }
       #define NODE_IS_IN_TREE(node)                ((bool) (node)->$left)
       #define IS_LEAFSENTINEL(node)                ((node)->$left == (node))
       #define NOT_LEAFSENTINEL(node)               ((node)->$left != (node))
-      #define CONTAINER_OFS_TO_FIELD(ctype, field) (((intptr_t)&(((ctype)2048)->field))-2048)
+      #define CONTAINER_OFS_TO_FIELD(ctype, field) (((uintptr_t)&(((ctype)2048)->field))-2048)
       #define CONTAINER_OF_FIELD(ctype, field, fp) ((cp)( ((char*)fp) - CONTAINER_OFS_TO_FIELD(ctype, field) ))
       #define PTR_OFS(node,ofs)                    ((void*)( ((char*)(void*)(node))+ofs ))
       #define SET_LEFT(node, l)                    (NODE_LEFT(node)= l)
+      #define IS_RED(node)                         NODE_COLOR(node)
+      #define IS_BLACK(node)                       (!IS_RED(node))
       C
    # The color is either the low bit of the 'right' pointer, or its own field.
    $c .= $self->with_packed_color? <<~C1 : <<~C2;
-      #define NODE_COLOR(node)       ((intptr_t)(node)->$right & 1)
-      #define IS_RED(node)           NODE_COLOR(node)
-      #define IS_BLACK(node)         (!IS_RED(node))
-      #define SET_COLOR_BLACK(node)  ((node)->$right = NODE_RIGHT(node));
-      #define SET_COLOR_RED(node)    ((node)->$right = ($np)((intptr_t)(node)->$right | 1))
-      #define COPY_COLOR(dest, src)  ((dest)->$right = ($np)(((intptr_t)(dest)->$right | 1) - 1 + NODE_COLOR(right)))
-      #define NODE_RIGHT(node)       (($np)(((intptr_t)(node)->$right | 1)-1))
-      #define SET_RIGHT(node, r)     ((node)->$right = ($np)((intptr_t)r | ((node)->$right & 1)))
+      #define SET_COLOR_BLACK(node)  ((node)->$right &= ~(uintptr_t)1);
+      #define SET_COLOR_RED(node)    ((node)->$right |= 1))
+      #define COPY_COLOR(dest, src)  ((dest)->$right = ((dest)->$right & ~(uintptr_t)1) | ((src)->$right & 1))
+      #define SET_RIGHT(node, r)     ((node)->$right = (uintptr_t)r | ((node)->$right & 1))
       C1
-      #define NODE_COLOR(node)       ((node)->$color)
-      #define IS_RED(node)           ((node)->$color)
-      #define IS_BLACK(node)         (!(node)->$color)
       #define SET_COLOR_BLACK(node)  ((node)->$color= 0)
       #define SET_COLOR_RED(node)    ((node)->$color= 1)
       #define COPY_COLOR(dest,src)   ((dest)->$color= (src)->$color)
-      #define NODE_RIGHT(node)       ((node)->$right)
       #define SET_RIGHT(node, r)     ((dest)->$right= (r))
       C2
    # these macros are needed for traversing upward when not using a top-down algorithm.
@@ -353,6 +442,16 @@ sub generate_implementation_macros($self) {
       #define SET_COUNT_STMT(node,val) ((void)0)
       #define ADD_COUNT_STMT(node,val) ((void)0)
       C2
+   $c .= $self->with_data_pointer? <<~C1 : <<~C2;
+      #define NODE_DATA(node)          ((node)->$data)
+      C1
+      #define NODE_DATA(node)          (((char*)node) + tree_node_to_data_ofs)
+      C2
+   $c .= $self->key_type? <<~C1 : <<~C2;
+      #define NODE_KEY(node)           (&(node)->$key)
+      C1
+      #define NODE_KEY(node)           (((char*)NODE_DATA(node)) + tree_data_to_key_ofs)
+      C2
    $self->_gen_result('', $c);
 }
 
@@ -363,33 +462,49 @@ Generate various accessors for the tree nodes.
 =cut
 
 sub generate_accessors($self) {
-   my ($left, $right, $color, $parent)= $self->node_fields(qw( left right color parent ));
+   my ($left, $right, $color, $parent, $data)= $self->node_fields(qw( left right color parent data ));
    my $ns= $self->namespace;
    my $np= $self->_node_pointer_type;
    my $tp= $self->_tree_pointer_type;
+   my $data_t= $self->node_data_type // 'void*';
    my $treep= $self->_tree_pointer_type;
-   my $api= $self->public_fn_prefix;
+   my $api= $self->public_api_decl;
    my $inline= $self->with_inline? 'inline' : $api;
-   my $node_right= $self->with_packed_color? "(($np)(((intptr_t)(node)->$right | 1)-1))" : "node->$right";
-   my $node_color= $self->with_packed_color? "((intptr_t)(node)->$right & 1)" : "node->$color";
+   my $node_right= $self->_c_node_right;
+   my $node_color= $self->_c_node_color;
+   my $block_node_is_added= "{ return (bool) node->$left; }";
+   my $block_node_color=    "{ $node_color }";
+   my $block_node_left=     "{ return node->$left && node->$left->$left != node->$left? node->$left : NULL; }";
+   my $block_node_right=    "{ $np right= $node_right; return right && right->$left != right? right : NULL; }";
+   my $block_node_parent=   "{ return node->$parent && node->$parent->$parent? node->$parent : NULL; }";
+   my $block_node_data= $self->with_data_poiner
+                          ? "{ return node->$data; }"
+                          : "{ return ($data_t)( ((char*)node) + ${ns}node_tree(node)->node_to_data_ofs ); }";
    my $h= <<~C;
       /* Quick test for whether an initialized node has been added to the tree */
-      $inline bool ${ns}node_is_added( $np node ) { return (bool) node->$left; }
+      $inline bool ${ns}node_is_added( $np node ) @{[ $inline eq $api? ";" : $block_node_is_added ]}
       
-      $inline $np ${ns}node_left( $np node ) { return node->$left && node->$left->$left != node->$left? node->$left : NULL; }
-      
-      $inline $np ${ns}node_right( $np node ) { return $node_right && $node_right->$left != $node_right? $node_right : NULL; }
-      
-      $inline bool ${ns}node_color( $np node ) { return (bool) $node_color; }
-      
-      /* Returns the tree this node belongs to, or NULL */
+      /* Returns the tree this node belongs to, or NULL.  This is O(log(n)) */
       $api $tp ${ns}node_tree( $np node );
+      
+      /* red=true, black=false */
+      $inline bool ${ns}node_color( $np node ) @{[ $inline eq $api? ";" : $block_node_color ]}
+      
+      /* Return root of left subtree, or NULL */
+      $inline $np ${ns}node_left( $np node ) @{[ $inline eq $api? ";" : $block_node_left ]}
+      
+      /* Return root of right subtree, or NULL */
+      $inline $np ${ns}node_right( $np node ) @{[ $inline eq $api? ";" : $block_node_right ]}
       
       /* Returns right-most child of this node, or NULL */
       $api $np ${ns}node_right_leaf( $np node );
       
       /* Returns left-most child of this node, or NULL */
       $api $np ${ns}node_left_leaf( $np node );
+      
+      /* Return the user-data pointer of a node@{[ $self->with_data_pointer? "" : ". Warning: log(n) operation" ]}*/
+      $inline $data_t ${ns}node_data( $np node ) @{[ $inline eq $api? ";" : $block_node_data ]}
+      
       C
    my $c= <<~C;
       $np ${ns}node_tree( $np node ) {
@@ -416,20 +531,24 @@ sub generate_accessors($self) {
       }
       C
    $c .= <<~C if $inline eq $api;
-      bool ${ns}node_is_added(node) { return NODE_IS_IN_TREE(node); }
-      $np ${ns}node_left(node) { return NOT_LEAFSENTINEL(NODE_LEFT(node))? NODE_LEFT(node) : NULL; }
-      $np ${ns}node_right(node) { return NOT_LEAFSENTINEL(NODE_RIGHT(node))? NODE_RIGHT(node) : NULL; }
-      bool ${ns}node_color(node) { return (bool) NODE_COLOR(node); }
+      bool ${ns}node_is_added(node) $block_node_is_added
+      $np ${ns}node_left(node) $block_node_left
+      $np ${ns}node_right(node) $block_node_right
+      bool ${ns}node_color(node) $block_node_color
+      $data_t ${ns}node_data(node) $block_node_data
       C
    $h .= <<~C if $self->with_parent;
-      $inline $np ${ns}node_parent( $np node ) { return node->$parent && node->$parent->$parent? node->$parent : NULL; }
+      /* Return tree which contains this subtree, or NULL at root of tree */
+      $inline $np ${ns}node_parent( $np node ) @{[ $inline eq $api? ";" : $block_node_parent ]}
       
+      /* Return previous node in left-to-right sequence */
       $api $np ${ns}node_prev( $np node );
       
+      /* Return next node in left-to-right sequence */
       $api $np ${ns}node_next( $np node );
       C
    $c .= <<~C if $inline eq $api && $self->with_parent;
-      $np ${ns}node_parent(node) { return NOT_ROOTSENTINEL(NODE_PARENT(node))? NODE_PARENT(node) : NULL; }
+      $np ${ns}node_parent(node) $block_node_parent
       C
    $c .= <<~C if $self->with_parent;
       $np ${ns}node_prev( $np node ) {
@@ -486,44 +605,39 @@ sub generate_accessors($self) {
    $self->_gen_result($h, $c);
 }
 
-=head2 generate_init_tree
+1;
+__END__
 
-This is the "constructor" of sorts.  It just initializes a tree struct which must be allocated
-by the caller.
-
-=cut
-
-sub generate_init_tree($self) {
-   my $api= $self->public_fn_prefix;
+sub generate_insert($self) {
+   my $api= $self->public_api_decl;
    my $ns= $self->namespace;
    my $np= $self->_node_pointer_type;
    my $tp= $self->_tree_pointer_type;
-   my $h= <<~C;
-      /* Initialize a tree. Caller manages object lifespan */
-      $api void ${ns}init_tree( $tp tree );
-      C
-   my $c= <<~C;
-      void ${ns}init_tree( $tp tree ) {
-         SET_LEFT(&tree->root_sentinel, &tree->leaf_sentinel);
-         SET_RIGHT(&tree->root_sentinel, &tree->leaf_sentinel);
-         SET_COLOR_BLACK(&tree->root_sentinel);
-         SET_COUNT(&tree->root_sentinel, 0);
-         SET_PARENT(&tree->root_sentinel, NULL);
-         
-         SET_LEFT(&tree->leaf_sentinel, &tree->leaf_sentinel);
-         SET_RIGHT(&tree->leaf_sentinel, &tree->leaf_sentinel);
-         SET_COLOR_BLACK(&tree->leaf_sentinel);
-         SET_COUNT(&tree->leaf_sentinel, 0);
-         SET_PARENT(&tree->leaf_sentinel, &tree->leaf_sentinel);
-      }
-      C
-   $self->_gen_result($h, $c);
+   my $h= $self->cmp eq 'callback'? <<~C1 : $self->cmp eq 'relative'? <<~C2 : <<~C3;
+      /* Insert a node */
+      
 }
 
-1;
+=head2 node_offset
 
-__END__
+This enables the option of using a red/black node that is contained within a larger struct at
+a known offset.  (The pointers in the R/B node still point to other inner nodes rather than
+the outer struct)  Set this attribute to a byte offset, or a field name of C<node_data_type>.
 
+Example:
+
+  struct my_struct {
+    ...
+    rbtree_node_t node;
+    ...
+  };
+
+  #  node_data_type => 'struct my_struct'
+  #  node_offset    => 'node',
+
+When using this feature, L</node_field_data> is unused, shrinking the node struct by one pointer.
+
+=cut
 
 /* Add a node to a tree */
 $api bool ${ns}node_insert( $nd *hint, $nd *node, ${ns}compare_fn cmp_fn, ${cmp_ctx_decl}int cmp_pointer_ofs );
