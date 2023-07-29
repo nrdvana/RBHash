@@ -7,7 +7,7 @@ use Config;
 use CodeGen::RedBlackTree::C;
 
 my @tests= (
-   [ 'default', { size_size => $Config{sizesize} }, <<~C ],
+   [ 'default', {}, <<~C ],
    struct rbtree_node;
    typedef struct rbtree_node rbtree_node_t;
    struct rbtree_node {
@@ -81,7 +81,7 @@ my @tests= (
 for (@tests) {
    my ($name, $opts, $expected)= @$_;
    my $rbgen= CodeGen::RedBlackTree::C->new($opts);
-   my ($h, $c)= $rbgen->generate_node_struct;
+   $rbgen->generate_node_struct->write(\my ($h, $c));
    $h =~ s: *//.*::g; # strip out comments so that they don't affect unit tests
    is( $h, $expected, $name );
 }

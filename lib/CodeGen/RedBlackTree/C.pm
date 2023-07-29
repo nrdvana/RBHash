@@ -10,28 +10,61 @@ our $VERSION; # VERSION
 
 =head1 SYNOPSIS
 
-  Lang::Generate::RedBlackTree::C->new(%options)
-    ->write_api('foo.h')
-    ->write_impl('foo.c')
-    ->write_wrapper(
-      'sometype-rb.h',
-      obj_t => 'SomeType',
-      node => 'NodeFieldName',  # struct SomeType { rbtree_node_t NodeFieldName; }
-      cmp => 'CompareFunc'      # int CompareFunc(SomeType *a, SomeType *b);
-   )
-    ->write_wrapper(
-      'sometype-rb.h',
-      obj_t => SomeType',
-      node => 'NodeField2',
-      key_t => 'const char*', key => 'KeyField',
-      cmp => 'strcmp'
-   );
+  my $rbgen= Lang::Generate::RedBlackTree::C->new(
+    namespace         => 'mytree_',
+    cmp               => 'numeric',
+    key_type          => 'uint64_t',
+  );
+  $rbgen->generate_rb_api->write('mytree.h', 'mytree.c');
 
 =head1 DESCRIPTION
 
 This module writes customizable Red/Black Tree algorithms as C source code.
 While these sorts of things could be done with C header macros, I've decided
-that is really a massive waste of time and wrote it as a perl script instead.
+that is really a massive waste of time and wrote it as a perl module instead.
+
+Why do you need to write custom tree algorithms?  Well, for starters, the same
+reason C++ uses a template for C<std::map>, so that it can bake the item key
+and comparison function directly into the code for better performance.
+
+But additionally, this module lets you select features for
+
+=over
+
+=item The 'parent' pointer
+
+This allows effecient iteration and deletion, but costs one extra pointer per
+node.
+
+=item Sub-tree 'count'
+
+Storing a count of sub-nodes at each node lets you fetch the Nth element of
+the collection in O(log(n)) time.  This is useful for finding a Median.
+
+=item Color-packing
+
+The red/black flag only requires one bit of storage.  You can pack it into the
+LSB of one of your pointers. (since they point to aligned data and don't use
+the low bits)  Doing this costs a bit of performance, but saves one int per
+node.
+
+=item Nesting Node Structs in User Data
+
+If you declare a node as a field in your own struct, you can avoid allocating
+separate tree nodes as you add your structs to a tree.  You also avoid needing
+a 'data' pointer in the node, by doing offset math from the node pointer to the
+containing struct.
+
+=item Relative Keys
+
+If a node's key is stored as an offset from its parent's key, you can
+efficiently "move" a range of nodes along a linear axis in C<log(n)> time.
+This is useful for editing sparse arrays.
+
+=back
+
+The attributes below can be passed to the constructor to control the code
+generation.  
 
 =cut
 
@@ -45,7 +78,7 @@ sub new {
       $class->can($_) or croak "Invalid attribute $_";
    }
    if (defined $args{cmp} && !defined $args{key_type}) {
-      if ($args{cmp} =~ /int/) {
+      if ($args{cmp} =~ /int|size_t/) {
          $args{key_type}= $args{cmp};
          $args{cmp}= 'numeric';
       } elsif ($args{cmp} =~ /^(numeric|relative)$/) {
@@ -67,11 +100,11 @@ For C output, this prefixes each function and data type with a string, such as "
 
 =head2 cmp
 
-The algorithm that will be sued for comparing nodes to determine their sort order.
+The algorithm that will be used for comparing nodes to determine their sort order.
 
 =over
 
-=item numeric
+=item C<'numeric'>
 
 Numeric comparison of keys using "<" and ">" operators.
 
@@ -79,25 +112,27 @@ Numeric comparison of keys using "<" and ">" operators.
 
 Alias for 'numeric' that sets key_type at the same time.
 
-=item relative
+=item C<'relative'>
 
 Keys will be placement within a numeric domain, and stored relative to the parent node
 such that they recalculate when the tree rotates, and a segment of the tree can be shifted
 in O(log(n)) time.
 
-=item strcmp
+=item C<'callback'>
+
+Each time nodes need compared, it will invoke a callback, providing it pointers to the
+key.  The callback gets one additional parameter which you configure per-tree.
+
+=item C<'strcmp'>
 
 Keys will be pointers, compared by passing them to strcmp.  Default key_type will be
 C<< const char* >>.
 
-=item memcmp
+=item I<*>
 
-Keys must be fixed-length arrays, or pointers to fixed-length arrays, and will be compared with
-memcmp.
-
-=item callback
-
-Each time nodes need compared, it will invoke a callback.
+Any other string you provide will be treated as the name of a function that takes two
+keys by value (of whatever L</key_type> is) and returns an int in the style of C<strcmp>.
+You must specify L</key_type>.
 
 =back
 
@@ -167,6 +202,12 @@ sub tree_struct($self) {
    : ($self->tree_type//'') =~ /^struct (\w+)/? $1
    : $self->namespace . 'tree'
 }
+# tree_type can be a struct typedef or pointer typedef.
+# This figures out which, and returns the pointer type.
+sub _tree_pointer_type($self) {
+   my $typename= $self->tree_type || $self->namespace . 'tree_t';
+   return $typename =~ /^[*]/? substr($typename,1) : $typename . '*';
+}
 
 sub node_type         { $_[0]{node_type} || undef }
 sub node_struct($self) {
@@ -174,15 +215,19 @@ sub node_struct($self) {
    : ($self->node_type//'') =~ /^struct (\w+)/? $1
    : $self->namespace . 'node';
 }
+# node_type can be a struct typedef or pointer typedef.
+# This figures out which, and returns the pointer type.
+sub _node_pointer_type($self) {
+   my $typename= $self->node_type || $self->namespace . 'node_t';
+   # If starts with '*', then it is a typedef that already indicates a pointer.
+   return $typename =~ /^[*]/? substr($typename,1) : $typename . '*';
+}
 
 sub node_data_type    { $_[0]{node_data_type} || undef }
 sub node_fields($self, @list) {
    @list? (map +($self->{node_fields}{$_} // $_), @list)
    : ($self->{node_fields})
 }
-
-sub size_type         { $_[0]{size_type} || $Config{sizetype} }
-sub size_size         { $_[0]{size_size} || $Config{sizesize} }
 
 =head2 with_parent
 
@@ -222,9 +267,40 @@ sub with_inline       { $_[0]{with_inline} // 1 }
 
 C declaration of Calling API for public functions.  Defaults to 'extern'.
 
+=head2 c_types
+
+  ...->new( c_types => { ptrdiff_t => 'long long', bool => 'int' } )
+
+  my ($size_t, $ptrdiff_t)= $rbgen->c_types(qw( size_t ptrdiff_t ));  
+
+A hashref of overrides for C type names that this module uses in generated code.
+
+If you call this as a method with a list of arguments, it returns that same list with any
+overrides from this hash applied.
+
+=head2 c_sizeof
+
+  ...->new( c_sizeof => { size_t => 8 } )
+
+This module needs C<sizeof(size_t)> if it bit-splices 'count' and 'color', and this can't
+be determined with macros, so you need to find out from something like autoconf and cofigure
+it here.
+
 =cut
 
 sub public_api_decl { $_[0]{public_api_decl} // 'extern' }
+
+sub c_types($self, @list) {
+   @list? (map +($self->{c_types}{$_} // $_), @list)
+   : ($self->{c_types});
+}
+
+sub c_sizeof($self, @list) {
+   my $sizeof= $self->{c_sizeof} //= {};
+   $sizeof->{size_t} //= $Config{sizesize};
+   @list? (map +($sizeof->{$_} // $_), @list)
+   : $sizeof;
+}
 
 =head2 src_h
 
@@ -241,18 +317,46 @@ as an arrayref.
 sub src_h             { $_[0]{src_h} ||= [] }
 sub src_c             { $_[0]{src_c} ||= [] }
 
-sub _gen_result($self, $h='', $c='') {
-   if (!defined wantarray) {
-      push $self->src_h->@*, $h if length $h;
-      push $self->src_c->@*, $c if length $c;
-   } else {
-      return wantarray? ($h, $c) : $h.$c;
-   }
-}
-
 =head1 METHODS
 
+=head2 write
+
+  $rbgen->write($header_fname, $c_unit_fname);
+
+This takes the accumulated L</src_h> and L</src_c> and writes them to the filenames you provide.
+The files must not exist.  If anything goes wrong, it throws an error.  If any of the generated
+code is Unicode, it is written as UTF-8.
+
+Returns C<$self> for convenient chaining.
+
+=cut
+
+sub write($self, $h_dest, $c_dest) {
+   _writefile($h_dest, join("\n", $self->src_h->@*)) if defined $h_dest;
+   _writefile($c_dest, join("\n", $self->src_c->@*)) if defined $c_dest;
+}
+sub _writefile($dest, $content) {
+   -e $dest and die "File exists: '$dest'";
+   open my $fh, '>:encoding(UTF-8)', $dest or die "open($dest): $!";
+   $fh->print($content)
+      && $fh->close
+      or die "write($dest): $!";
+}
+
 =head2 generate_rb_api
+
+  $rbgen->generate_rb_api;
+
+Generate all headers and implementation of the core Red/Black API, not including type-safe
+wrappers.  Returns '$self' for convenient chaining.
+
+This is a shortcut to call:
+
+   * generate_node_struct
+   * generate_implementation_util
+   * generate_init_tree
+   * generate_accessors
+   * generate_insert
 
 =cut
 
@@ -262,7 +366,7 @@ sub generate_rb_api($self) {
    $self->generate_init_tree;
    $self->generate_accessors;
    $self->generate_insert;
-   return (join("\n", $self->src_h->@*), join("\n", $self->src_c->@*));
+   return $self;
 }
 
 =head2 generate_node_struct
@@ -270,17 +374,6 @@ sub generate_rb_api($self) {
 Generate the R/B Tree and Node structs (and typedefs)
 
 =cut
-
-sub _node_pointer_type($self) {
-   my $typename= $self->node_type || $self->namespace . 'node_t';
-   # If starts with '*', then it is a typedef that already indicates a pointer.
-   return $typename =~ /^[*]/? substr($typename,1) : $typename . '*';
-}
-
-sub _tree_pointer_type($self) {
-   my $typename= $self->tree_type || $self->namespace . 'tree_t';
-   return $typename =~ /^[*]/? substr($typename,1) : $typename . '*';
-}
 
 sub _if($cond, @items) {
    return $cond? @items : ();
@@ -292,6 +385,8 @@ sub _pad_to_same_len {
 
 sub generate_node_struct($self) {
    my ($is_typedef, $struct_name, $typedef_varname);
+   my ($bool, $ptrdiff_t, $uintptr_t, $size_t)= $self->c_types(qw( bool ptrdiff_t uintptr_t size_t));
+   my ($size_sz)= $self->c_sizeof(qw( size_t ));
    my $ns= $self->namespace;
    my $node_ptr_t= $self->_node_pointer_type;
    my $node_struct= $self->node_struct;
@@ -306,7 +401,6 @@ sub generate_node_struct($self) {
       : '*'.$tree_ptr_t;
    my $key_t= $self->key_type // '';
    my $data_t= $self->node_data_type // 'void*';
-   my ($size_t, $size_sz)= ($self->size_type, $self->size_size);
    my ($left, $right, $parent, $data, $color, $count, $key)
       = $self->node_fields(qw( left right parent data color count key ));
    # If key_t ends with a bit splice, move the splice onto the key field name
@@ -321,7 +415,7 @@ sub generate_node_struct($self) {
                                        "struct $node_struct {",
                                        "   $node_ptr_t $left;",
       _if( !$self->with_packed_color,  "   $node_ptr_t $right;" ),
-      _if( $self->with_packed_color,   "   uintptr_t $right; // LSB is 0=black, 1=red" ),
+      _if( $self->with_packed_color,   "   $uintptr_t $right; // LSB is 0=black, 1=red" ),
       _if( $self->with_parent,         "   $node_ptr_t $parent;" ),
       _if( $self->with_data_pointer,   "   $data_t $data; // pointer to user data" ),
       _if( !$self->with_packed_color,  "   $size_t $color : 1; // black=0, red=1" ),
@@ -332,14 +426,15 @@ sub generate_node_struct($self) {
                                        "struct $tree_struct {",
                                        "   $node_t root_sentinel; // parent node of root node of tree",
                                        "   $node_t leaf_sentinel; // child node of all leaf nodes",
-      _if( !$self->with_data_pointer,  "   ptrdiff_t node_to_data_ofs; // offset from node to user-data" ),
-      _if( !defined $self->key_type,   "   ptrdiff_t data_to_key_ofs; // offset from user-data to key passed to callback" ),
+      _if( !$self->with_data_pointer,  "   $ptrdiff_t node_to_data_ofs; // offset from node to user-data" ),
+      _if( !defined $self->key_type,   "   $ptrdiff_t data_to_key_ofs; // offset from user-data to key passed to callback" ),
       _if( $self->cmp eq 'callback',   "   ${ns}compare_fp cmp; // compare two keys",
                                        "   void* cmp_context;   // first argument passed to cmp" ),
                                        "};",
       _if( $tree_typedef,              "typedef struct $tree_struct $tree_typedef;" ),
       '';
-   $self->_gen_result($h, '');
+   push $self->src_h->@*, $h;
+   $self;
 }
 
 =head2 generate_init_tree
@@ -383,7 +478,9 @@ sub generate_init_tree($self) {
       _if( $self->cmp eq 'callback',   "   tree->cmp= cmp;",
                                        "   tree->cmp_context= cmp_context;" ),
       "}\n";
-   $self->_gen_result($h, $c);
+   push $self->src_h->@*, $h;
+   push $self->src_c->@*, $c;
+   $self;
 }
 
 =head2 generate_implementation_macros
@@ -395,7 +492,8 @@ Generates macros that are only seen/used in the source file.
 sub _c_node_right($self, $node='node') {
    my $np= $self->_node_pointer_type;
    my ($right)= $self->node_fields('right');
-   $self->with_packed_color? "(($np)(($node)->$right & ~(uintptr_t)1))"
+   my ($uintptr_t)= $self->c_types('uintptr_t');
+   $self->with_packed_color? "(($np)(($node)->$right & ~($uintptr_t)1))"
    : "(($node)->$right)"
 }
 
@@ -409,6 +507,8 @@ sub _c_node_color($self, $node='node') {
 sub generate_implementation_util($self) {
    my ($left, $right, $color, $parent, $count, $data, $key)
       = $self->node_fields(qw( left right color parent count data key ));
+   my ($uintptr_t, $bool, $size_t)
+      = $self->c_types(qw( uintptr_t bool size_t ));
    my $np= $self->_node_pointer_type;
    my $c= <<~C;
       // Max conceivable depth of a correct Red/Black tree is
@@ -417,7 +517,7 @@ sub generate_implementation_util($self) {
       #define NODE_LEFT(node)                      ((node)->$left)
       #define NODE_RIGHT(node)                     ${\ $self->_c_node_right }
       #define NODE_COLOR(node)                     ${\ $self->_c_node_color }
-      #define NODE_IS_IN_TREE(node)                ((bool) (node)->$left)
+      #define NODE_IS_IN_TREE(node)                (($bool) (node)->$left)
       #define IS_LEAFSENTINEL(node)                ((node)->$left == (node))
       #define NOT_LEAFSENTINEL(node)               ((node)->$left != (node))
       #define CONTAINER_OFS_TO_FIELD(ctype, field) ( ((char*) &(((ctype)2048)->field)) - ((char*)2048) )
@@ -429,25 +529,25 @@ sub generate_implementation_util($self) {
       C
    # The color is either the low bit of the 'right' pointer, or its own field.
    $c .= $self->with_packed_color? <<~C1 : <<~C2;
-      #define SET_COLOR_BLACK(node)  ((node)->$right &= ~(uintptr_t)1);
-      #define SET_COLOR_RED(node)    ((node)->$right |= 1))
-      #define COPY_COLOR(dest, src)  ((dest)->$right = ((dest)->$right & ~(uintptr_t)1) | ((src)->$right & 1))
-      #define SET_RIGHT(node, r)     ((node)->$right = (uintptr_t)r | ((node)->$right & 1))
+      #define SET_COLOR_BLACK(node)    ((node)->$right &= ~($uintptr_t)1);
+      #define SET_COLOR_RED(node)      ((node)->$right |= 1))
+      #define COPY_COLOR(dest, src)    ((dest)->$right = ((dest)->$right & ~($uintptr_t)1) | ((src)->$right & 1))
+      #define SET_RIGHT(node, r)       ((node)->$right = ($uintptr_t)r | ((node)->$right & 1))
       C1
-      #define SET_COLOR_BLACK(node)  ((node)->$color= 0)
-      #define SET_COLOR_RED(node)    ((node)->$color= 1)
-      #define COPY_COLOR(dest,src)   ((dest)->$color= (src)->$color)
-      #define SET_RIGHT(node, r)     ((node)->$right= (r))
+      #define SET_COLOR_BLACK(node)    ((node)->$color= 0)
+      #define SET_COLOR_RED(node)      ((node)->$color= 1)
+      #define COPY_COLOR(dest,src)     ((dest)->$color= (src)->$color)
+      #define SET_RIGHT(node, r)       ((node)->$right= (r))
       C2
    # these macros are needed for traversing upward when not using a top-down algorithm.
    $c .= $self->with_parent? <<~C1 : <<~C2;
-      #define IS_ROOTSENTINEL(node)  (!(bool) (node)->$parent)
-      #define NOT_ROOTSENTINEL(node) ((bool) (node)->$parent)
-      #define NODE_PARENT(node)      ((node)->$parent)
-      #define SET_PARENT(node, p)    ((node)->$parent= (p))
+      #define IS_ROOTSENTINEL(node)    (!($bool) (node)->$parent)
+      #define NOT_ROOTSENTINEL(node)   (($bool) (node)->$parent)
+      #define NODE_PARENT(node)        ((node)->$parent)
+      #define SET_PARENT(node, p)      ((node)->$parent= (p))
       C1
-      #define NODE_PARENT(node)      ((void)0)
-      #define SET_PARENT(node, p)    ((void)0)
+      #define NODE_PARENT(node)        ((void)0)
+      #define SET_PARENT(node, p)      ((void)0)
       C2
    $c .= $self->with_count? <<~C1 : <<~C2;
       #define GET_COUNT(node)          ((node)->$count)
@@ -514,7 +614,7 @@ sub generate_implementation_util($self) {
        * Node counts and/or relative keys are corrected as rotations occur.
        * node_stack[0] always refers to the parent-sentinel.
        */
-      static void balance( $np *node_stack, size_t cur ) {
+      static void balance( $np *node_stack, $size_t cur ) {
          // node_stack[0] is the root sentinel, and node_stack[1] is the root.
          // If the root is red we just swap it to black, so nothing to do unless
          // we are below the root.  Also, if current is a black node, no rotations needed
@@ -570,7 +670,8 @@ sub generate_implementation_util($self) {
          return;
       }
       C
-   $self->_gen_result('', $c);
+   push $self->src_c->@*, $c;
+   $self;
 }
 
 =head2 generate_accessors
@@ -581,6 +682,7 @@ Generate various accessors for the tree nodes.
 
 sub generate_accessors($self) {
    my ($left, $right, $color, $parent, $data)= $self->node_fields(qw( left right color parent data ));
+   my ($bool)= $self->c_types(qw( bool ));
    my $ns= $self->namespace;
    my $np= $self->_node_pointer_type;
    my $tp= $self->_tree_pointer_type;
@@ -590,7 +692,7 @@ sub generate_accessors($self) {
    my $inline= $self->with_inline? 'inline' : $api;
    my $node_right= $self->_c_node_right;
    my $node_color= $self->_c_node_color;
-   my $block_node_is_added= "{ return (bool) node->$left; }";
+   my $block_node_is_added= "{ return ($bool) node->$left; }";
    my $block_node_color=    "{ return $node_color; }";
    my $block_node_left=     "{ return node->$left && node->$left->$left != node->$left? node->$left : NULL; }";
    my $block_node_right=    "{ $np right= $node_right; return right && right->$left != right? right : NULL; }";
@@ -600,13 +702,13 @@ sub generate_accessors($self) {
                           : "{ return ($data_t)( ((char*)node) + ${ns}node_tree(node)->node_to_data_ofs ); }";
    my $h= <<~C;
       /* Quick test for whether an initialized node has been added to the tree */
-      $inline bool ${ns}node_is_added( $np node ) @{[ $inline eq $api? ";" : $block_node_is_added ]}
+      $inline $bool ${ns}node_is_added( $np node ) @{[ $inline eq $api? ";" : $block_node_is_added ]}
       
       /* Returns the tree this node belongs to, or NULL.  This is O(log(n)) */
       $api $tp ${ns}node_tree( $np node );
       
       /* red=true, black=false */
-      $inline bool ${ns}node_color( $np node ) @{[ $inline eq $api? ";" : $block_node_color ]}
+      $inline $bool ${ns}node_color( $np node ) @{[ $inline eq $api? ";" : $block_node_color ]}
       
       /* Return root of left subtree, or NULL */
       $inline $np ${ns}node_left( $np node ) @{[ $inline eq $api? ";" : $block_node_left ]}
@@ -649,10 +751,10 @@ sub generate_accessors($self) {
       }
       C
    $c .= <<~C;
-      bool ${ns}node_is_added($np node) @{[ $inline eq $api? $block_node_is_added : ";" ]}
+      $bool ${ns}node_is_added($np node) @{[ $inline eq $api? $block_node_is_added : ";" ]}
       $np ${ns}node_left($np node) @{[ $inline eq $api? $block_node_left : ";" ]}
       $np ${ns}node_right($np node) @{[ $inline eq $api? $block_node_right : ";" ]}
-      bool ${ns}node_color($np node) @{[ $inline eq $api? $block_node_color : ";" ]}
+      $bool ${ns}node_color($np node) @{[ $inline eq $api? $block_node_color : ";" ]}
       $data_t ${ns}node_data($np node) @{[ $inline eq $api? $block_node_data : ";" ]}
       C
    $h .= <<~C if $self->with_parent;
@@ -720,26 +822,37 @@ sub generate_accessors($self) {
          }
       }
       C
-   $self->_gen_result($h, $c);
+   push $self->src_h->@*, $h;
+   push $self->src_c->@*, $c;
+   $self;
 }
 
 sub generate_insert($self) {
    my $api= $self->public_api_decl;
+   my ($bool, $size_t)= $self->c_types(qw( bool size_t ));
    my $ns= $self->namespace;
    my $np= $self->_node_pointer_type;
    my $tp= $self->_tree_pointer_type;
-   my $compare= "NODE_KEY(node) - NODE_KEY(node_stack[cur])";
+   my $compare= $self->cmp eq 'numeric'? "NODE_KEY(node) - NODE_KEY(next)"
+      : $self->cmp eq 'relative'? "NODE_KEY(node) -= NODE_KEY(next)"
+      : $self->cmp eq 'callback'? "(tree->cmp)(tree->cmp_context, node_key_p, NODE_KEY_P(next))"
+      : $self->cmp =~ /^\w+$/? $self->cmp."(NODE_KEY(node), NODE_KEY(next))"
+      : croak "Unhandled comparison mode '".$self->cmp."'";
    my $h= <<~C1;
       /* Insert a node */
-      $api bool ${ns}tree_insert($tp tree, $np node);
+      $api $bool ${ns}tree_insert($tp tree, $np node);
       C1
    my $c= <<~C1;
-      bool ${ns}tree_insert($tp tree, $np node) {
+      $bool ${ns}tree_insert($tp tree, $np node) {
          $np node_stack[NODE_STACK_LIMIT];
+         @{[ $self->cmp eq 'callback' and
+            "void* node_key_p= NODE_KEY_P(node);\\n"
+        ."   ptrdiff_t tree_data_to_key_ofs= tree->data_to_key_ofs;"
+         ]}
          // Can't insert node if it is already in the tree
          if (NODE_IS_IN_TREE(node))
             return false;
-         size_t cur= 0;
+         $size_t cur= 0;
          node_stack[cur]= &tree->root_sentinel;
          int cmp= -1;
          $np next= NODE_LEFT(node_stack[cur]);
@@ -762,14 +875,20 @@ sub generate_insert($self) {
          
          // Update tree counts
          SET_COUNT(node, 1);
-         for (size_t i=0; i <= cur; i++)
+         for ($size_t i=0; i <= cur; i++)
             ADD_COUNT(node_stack[i], 1);
          
          balance(node_stack, cur);
          return true;
       }
       C1
-   $self->_gen_result($h, $c);
+   push $self->src_h->@*, $h;
+   push $self->src_c->@*, $c;
+   $self;
+}
+
+sub generate_find($self) {
+   
 }
 
 1;

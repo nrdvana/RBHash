@@ -15,7 +15,7 @@ my $rbgen= CodeGen::RedBlackTree::C->new(
    key_type => 'size_t:15',
 );
 
-ok( (my ($h, $c)= $rbgen->generate_rb_api), 'Generated source code' );
+ok( $rbgen->generate_rb_api->write(\my($h, $c)), 'Generated source code' );
 
 {
    skip 1, 'No C compiler available' unless have_c_compiler;
