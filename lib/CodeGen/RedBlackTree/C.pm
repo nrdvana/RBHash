@@ -241,7 +241,7 @@ as an arrayref.
 sub src_h             { $_[0]{src_h} ||= [] }
 sub src_c             { $_[0]{src_c} ||= [] }
 
-sub _gen_result($self, $h, $c) {
+sub _gen_result($self, $h='', $c='') {
    if (!defined wantarray) {
       push $self->src_h->@*, $h if length $h;
       push $self->src_c->@*, $c if length $c;
@@ -251,6 +251,19 @@ sub _gen_result($self, $h, $c) {
 }
 
 =head1 METHODS
+
+=head2 generate_rb_api
+
+=cut
+
+sub generate_rb_api($self) {
+   $self->generate_node_struct;
+   $self->generate_implementation_util;
+   $self->generate_init_tree;
+   $self->generate_accessors;
+   $self->generate_insert;
+   return (join("\n", $self->src_h->@*), join("\n", $self->src_c->@*));
+}
 
 =head2 generate_node_struct
 
@@ -366,7 +379,7 @@ sub generate_init_tree($self) {
          SET_PARENT(&tree->leaf_sentinel, &tree->leaf_sentinel);
       C
       _if( !$self->with_data_pointer,  "   tree->node_to_data_ofs= node_to_data;" ),
-      _if( defined $self->key_type,    "   tree->data_to_key_ofs= data_to_key;" ),
+      _if( !defined $self->key_type,   "   tree->data_to_key_ofs= data_to_key;" ),
       _if( $self->cmp eq 'callback',   "   tree->cmp= cmp;",
                                        "   tree->cmp_context= cmp_context;" ),
       "}\n";
@@ -390,22 +403,25 @@ sub _c_node_color($self, $node='node') {
    my $np= $self->_node_pointer_type;
    my ($right, $color)= $self->node_fields('right','color');
    $self->with_packed_color? "(($node)->$right & 1)"
-   : "(($node)->$right)"
+   : "(($node)->$color)"
 }
 
-sub generate_implementation_macros($self) {
+sub generate_implementation_util($self) {
    my ($left, $right, $color, $parent, $count, $data, $key)
       = $self->node_fields(qw( left right color parent count data key ));
    my $np= $self->_node_pointer_type;
    my $c= <<~C;
+      // Max conceivable depth of a correct Red/Black tree is
+      // log2(max number of nodes) * 2 + 1
+      #define NODE_STACK_LIMIT (62*2+1)
       #define NODE_LEFT(node)                      ((node)->$left)
       #define NODE_RIGHT(node)                     ${\ $self->_c_node_right }
       #define NODE_COLOR(node)                     ${\ $self->_c_node_color }
       #define NODE_IS_IN_TREE(node)                ((bool) (node)->$left)
       #define IS_LEAFSENTINEL(node)                ((node)->$left == (node))
       #define NOT_LEAFSENTINEL(node)               ((node)->$left != (node))
-      #define CONTAINER_OFS_TO_FIELD(ctype, field) (((uintptr_t)&(((ctype)2048)->field))-2048)
-      #define CONTAINER_OF_FIELD(ctype, field, fp) ((cp)( ((char*)fp) - CONTAINER_OFS_TO_FIELD(ctype, field) ))
+      #define CONTAINER_OFS_TO_FIELD(ctype, field) ( ((char*) &(((ctype)2048)->field)) - ((char*)2048) )
+      #define CONTAINER_OF_FIELD(ctype, field, fp) ((ctype)( ((char*)fp) - CONTAINER_OFS_TO_FIELD(ctype, field) ))
       #define PTR_OFS(node,ofs)                    ((void*)( ((char*)(void*)(node))+ofs ))
       #define SET_LEFT(node, l)                    (NODE_LEFT(node)= l)
       #define IS_RED(node)                         NODE_COLOR(node)
@@ -421,7 +437,7 @@ sub generate_implementation_macros($self) {
       #define SET_COLOR_BLACK(node)  ((node)->$color= 0)
       #define SET_COLOR_RED(node)    ((node)->$color= 1)
       #define COPY_COLOR(dest,src)   ((dest)->$color= (src)->$color)
-      #define SET_RIGHT(node, r)     ((dest)->$right= (r))
+      #define SET_RIGHT(node, r)     ((node)->$right= (r))
       C2
    # these macros are needed for traversing upward when not using a top-down algorithm.
    $c .= $self->with_parent? <<~C1 : <<~C2;
@@ -435,12 +451,12 @@ sub generate_implementation_macros($self) {
       C2
    $c .= $self->with_count? <<~C1 : <<~C2;
       #define GET_COUNT(node)          ((node)->$count)
-      #define SET_COUNT_STMT(node,val) ((node)->$count= (val))
-      #define ADD_COUNT_STMT(node,val) ((node)->$count+= (val))
+      #define SET_COUNT(node,val)      ((node)->$count= (val))
+      #define ADD_COUNT(node,val)      ((node)->$count+= (val))
       C1
       #define GET_COUNT(node)          ((void)0)
-      #define SET_COUNT_STMT(node,val) ((void)0)
-      #define ADD_COUNT_STMT(node,val) ((void)0)
+      #define SET_COUNT(node,val)      ((void)0)
+      #define ADD_COUNT(node,val)      ((void)0)
       C2
    $c .= $self->with_data_pointer? <<~C1 : <<~C2;
       #define NODE_DATA(node)          ((node)->$data)
@@ -448,10 +464,112 @@ sub generate_implementation_macros($self) {
       #define NODE_DATA(node)          (((char*)node) + tree_node_to_data_ofs)
       C2
    $c .= $self->key_type? <<~C1 : <<~C2;
-      #define NODE_KEY(node)           (&(node)->$key)
+      #define NODE_KEY(node)           ((node)->$key)
+      #define NODE_KEY_P(node)         (&((node)->$key))
       C1
-      #define NODE_KEY(node)           (((char*)NODE_DATA(node)) + tree_data_to_key_ofs)
+      #define NODE_KEY_P(node)         (((char*)NODE_DATA(node)) + tree_data_to_key_ofs)
+      #define NODE_KEY(node)           ((void)0) // can't access without knowing its type
       C2
+   $c .= <<~C;
+      static void rotate_right($np *node_stack) {
+         $np node= node_stack[0];
+         $np parent= node_stack[-1];
+         $np new_head= NODE_LEFT(node);
+
+         if (NODE_LEFT(parent) == node) SET_LEFT(parent, new_head);
+         else SET_RIGHT(parent, new_head);
+         SET_PARENT(new_head, parent);
+
+         ADD_COUNT(node, -1 - GET_COUNT(NODE_LEFT(new_head)));
+         ADD_COUNT(new_head, 1 + GET_COUNT(NODE_RIGHT(node)));
+         SET_LEFT(node, NODE_RIGHT(new_head));
+         SET_PARENT(NODE_RIGHT(new_head), node);
+
+         SET_RIGHT(new_head, node);
+         SET_PARENT(node, new_head);
+         node_stack[0]= new_head;
+      }
+
+      static void rotate_left($np *node_stack) {
+         $np node= node_stack[0];
+         $np parent= node_stack[-1];
+         $np new_head= NODE_RIGHT(node);
+
+         if (NODE_LEFT(parent) == node) SET_LEFT(parent, new_head);
+         else SET_RIGHT(parent, new_head);
+         SET_PARENT(new_head, parent);
+
+         ADD_COUNT(node, -1 - GET_COUNT(NODE_RIGHT(new_head)));
+         ADD_COUNT(new_head, 1 + GET_COUNT(NODE_LEFT(node)));
+         SET_RIGHT(node, NODE_LEFT(new_head));
+         SET_PARENT(NODE_LEFT(new_head), node);
+
+         SET_LEFT(new_head, node);
+         SET_PARENT(node, new_head);
+         node_stack[0]= new_head;
+      }
+      
+      /* Re-balance a tree which has just had one element added.
+       * node_stack[cur] is the parent node of the node just added.  The child is red.
+       * Node counts and/or relative keys are corrected as rotations occur.
+       * node_stack[0] always refers to the parent-sentinel.
+       */
+      static void balance( $np *node_stack, size_t cur ) {
+         // node_stack[0] is the root sentinel, and node_stack[1] is the root.
+         // If the root is red we just swap it to black, so nothing to do unless
+         // we are below the root.  Also, if current is a black node, no rotations needed
+         while (cur > 1 && IS_RED(node_stack[cur])) {
+            // current is red, the imbalanced child is red, and parent is black.
+            $np current= node_stack[cur];
+            $np parent= node_stack[cur-1];
+            // if the current is on the left of the parent, the parent is to the right
+            if (NODE_LEFT(parent) == current) {
+               // if the sibling is also red, we can pull down the color black from the parent
+               if (IS_RED(NODE_RIGHT(parent))) {
+                  SET_COLOR_BLACK(NODE_RIGHT(parent));
+                  SET_COLOR_BLACK(current);
+                  SET_COLOR_RED(parent);
+               }
+               else {
+                  // if the imbalance (red node) is on the right, and the parent is on the right,
+                  //  need to rotate those nodes over to this side.
+                  if (IS_RED(NODE_RIGHT(current)))
+                     rotate_left(node_stack+cur);
+                  // Now we can do our right rotation to balance the tree.
+                  rotate_right(node_stack+cur-1);
+                  SET_COLOR_RED(parent);
+                  SET_COLOR_BLACK(node_stack[cur-1]);
+                  return;
+               }
+            }
+            // else the parent is to the left
+            else {
+               // if the sibling is also red, we can pull down the color black from the parent
+               if (IS_RED(NODE_LEFT(parent))) {
+                  SET_COLOR_BLACK(NODE_LEFT(parent));
+                  SET_COLOR_BLACK(current);
+                  SET_COLOR_RED(parent);
+               }
+               else {
+                  // if the imbalance (red node) is on the left, and the parent is on the left,
+                  //  need to rotate those nodes over to this side.
+                  if (IS_RED(NODE_LEFT(current)))
+                     rotate_right(node_stack+cur);
+                  // Now we can do our left rotation to balance the tree.
+                  rotate_left(node_stack+cur-1);
+                  SET_COLOR_RED(parent);
+                  SET_COLOR_BLACK(node_stack[cur-1]);
+                  return;
+               }
+            }
+            // jump twice up the tree. if current reaches the HeadSentinel (black node), we're done
+            cur -= 2;
+         }
+         // now set the root node to be black
+         SET_COLOR_BLACK(NODE_LEFT(node_stack[0]));
+         return;
+      }
+      C
    $self->_gen_result('', $c);
 }
 
@@ -473,11 +591,11 @@ sub generate_accessors($self) {
    my $node_right= $self->_c_node_right;
    my $node_color= $self->_c_node_color;
    my $block_node_is_added= "{ return (bool) node->$left; }";
-   my $block_node_color=    "{ $node_color }";
+   my $block_node_color=    "{ return $node_color; }";
    my $block_node_left=     "{ return node->$left && node->$left->$left != node->$left? node->$left : NULL; }";
    my $block_node_right=    "{ $np right= $node_right; return right && right->$left != right? right : NULL; }";
    my $block_node_parent=   "{ return node->$parent && node->$parent->$parent? node->$parent : NULL; }";
-   my $block_node_data= $self->with_data_poiner
+   my $block_node_data= $self->with_data_pointer
                           ? "{ return node->$data; }"
                           : "{ return ($data_t)( ((char*)node) + ${ns}node_tree(node)->node_to_data_ofs ); }";
    my $h= <<~C;
@@ -507,7 +625,7 @@ sub generate_accessors($self) {
       
       C
    my $c= <<~C;
-      $np ${ns}node_tree( $np node ) {
+      $tp ${ns}node_tree( $np node ) {
          if (!NODE_LEFT(node) || !NODE_RIGHT(node))
             return NULL;
          while (!IS_LEAFSENTINEL(node))
@@ -523,19 +641,19 @@ sub generate_accessors($self) {
          return node;
       }
       $np ${ns}node_right_leaf( $np node ) {
-         if (IS_LEAFSENTINEL(node) || IS_LEAFSENTINEL(NODE_RIGHT(node))
+         if (IS_LEAFSENTINEL(node) || IS_LEAFSENTINEL(NODE_RIGHT(node)))
             return NULL;
          while (NOT_LEAFSENTINEL(NODE_RIGHT(node)))
             node= NODE_RIGHT(node);
          return node;
       }
       C
-   $c .= <<~C if $inline eq $api;
-      bool ${ns}node_is_added(node) $block_node_is_added
-      $np ${ns}node_left(node) $block_node_left
-      $np ${ns}node_right(node) $block_node_right
-      bool ${ns}node_color(node) $block_node_color
-      $data_t ${ns}node_data(node) $block_node_data
+   $c .= <<~C;
+      bool ${ns}node_is_added($np node) @{[ $inline eq $api? $block_node_is_added : ";" ]}
+      $np ${ns}node_left($np node) @{[ $inline eq $api? $block_node_left : ";" ]}
+      $np ${ns}node_right($np node) @{[ $inline eq $api? $block_node_right : ";" ]}
+      bool ${ns}node_color($np node) @{[ $inline eq $api? $block_node_color : ";" ]}
+      $data_t ${ns}node_data($np node) @{[ $inline eq $api? $block_node_data : ";" ]}
       C
    $h .= <<~C if $self->with_parent;
       /* Return tree which contains this subtree, or NULL at root of tree */
@@ -605,18 +723,57 @@ sub generate_accessors($self) {
    $self->_gen_result($h, $c);
 }
 
-1;
-__END__
-
 sub generate_insert($self) {
    my $api= $self->public_api_decl;
    my $ns= $self->namespace;
    my $np= $self->_node_pointer_type;
    my $tp= $self->_tree_pointer_type;
-   my $h= $self->cmp eq 'callback'? <<~C1 : $self->cmp eq 'relative'? <<~C2 : <<~C3;
+   my $compare= "NODE_KEY(node) - NODE_KEY(node_stack[cur])";
+   my $h= <<~C1;
       /* Insert a node */
-      
+      $api bool ${ns}tree_insert($tp tree, $np node);
+      C1
+   my $c= <<~C1;
+      bool ${ns}tree_insert($tp tree, $np node) {
+         $np node_stack[NODE_STACK_LIMIT];
+         // Can't insert node if it is already in the tree
+         if (NODE_IS_IN_TREE(node))
+            return false;
+         size_t cur= 0;
+         node_stack[cur]= &tree->root_sentinel;
+         int cmp= -1;
+         $np next= NODE_LEFT(node_stack[cur]);
+         while (NOT_LEAFSENTINEL(next)) {
+            if (++cur >= NODE_STACK_LIMIT)
+               return false;
+            node_stack[cur]= next;
+            cmp= $compare;
+            next= (cmp < 0)? NODE_LEFT(next) : NODE_RIGHT(next);
+         }
+         if (cmp < 0) {
+            SET_LEFT(node_stack[cur], node);
+         } else {
+            SET_RIGHT(node_stack[cur], node);
+         }
+         SET_PARENT(node, node_stack[cur]);
+         SET_LEFT(node, &tree->leaf_sentinel);
+         SET_RIGHT(node, &tree->leaf_sentinel);
+         SET_COLOR_RED(node);
+         
+         // Update tree counts
+         SET_COUNT(node, 1);
+         for (size_t i=0; i <= cur; i++)
+            ADD_COUNT(node_stack[i], 1);
+         
+         balance(node_stack, cur);
+         return true;
+      }
+      C1
+   $self->_gen_result($h, $c);
 }
+
+1;
+__END__
 
 =head2 node_offset
 

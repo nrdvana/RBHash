@@ -4,8 +4,9 @@ use Exporter 'import';
 use File::Temp;
 use Carp;
 use Capture::Tiny 'capture';
-our @EXPORT= qw( have_c_compiler c_eval sizeof_ptr sizeof_size );
-
+our @EXPORT_OK= qw( have_c_compiler c_eval sizeof_ptr sizeof_size );
+our %EXPORT_TAGS= ( all => \@EXPORT_OK );
+our $DEBUG= $ENV{DEBUG} // 0;
 our $cc;
 sub have_c_compiler {
    $cc ||= _detect_compiler();
@@ -25,9 +26,9 @@ sub c_compile {
 }
 
 sub _new_c_file {
-   state $cc_dir = File::Temp->newdir();
+   state $cc_dir = File::Temp->newdir($DEBUG? (CLEANUP => 0) : ());
    my $content= shift;
-   my $tmp= File::Temp->new(DIR => $cc_dir, SUFFIX => '.c');
+   my $tmp= File::Temp->new(DIR => $cc_dir, SUFFIX => '.c', ($DEBUG? (UNLINK => 0) : ()));
    $tmp->print($content) or die "write: $!";
    close $tmp or die "close: $!";
    $tmp;
@@ -41,7 +42,14 @@ sub c_eval {
    $c_src[-1] =~ s/^\s+//;
    $c_src[-1] =~ s/\s*;\s*$//;
    $c_src[-1]= "int main() {\n  $c_src[-1];\n  return 0;\n}";
-   unshift @c_src, "#include <stdlib.h>\n#include <stdio.h>\n#include <string.h>\n";
+   unshift @c_src, <<~C;
+      #include <stdlib.h>
+      #include <stdio.h>
+      #include <string.h>
+      #include <stddef.h>
+      #include <stdbool.h>
+      #include <assert.h>
+      C
    my $src= join("\n", @c_src, '');
    my ($stdout, $stderr, $exe_file)= capture { c_compile($src); };
    defined $exe_file
@@ -49,6 +57,7 @@ sub c_eval {
    ($stdout, $stderr, my $exit)= capture { system($exe_file) };
    $exit == 0
       or croak "\n$src\n$stdout\n$stderr\nEval failed: $?";
+   say $stderr;
    chomp $stdout;
    return $stdout;
 }
