@@ -25,7 +25,7 @@
  * number of elements.  This can be increased for better hashing,
  * or decreased for memory savings.
  */
-#ifnddef ${NAMESPACE}_TABLE_BUCKETS
+#ifndef ${NAMESPACE}_TABLE_BUCKETS
 #define ${NAMESPACE}_TABLE_BUCKETS(capacity) (capacity)
 #endif
 /* This macro tells you the array index (starting from rbtable)
@@ -77,17 +77,18 @@
    struct ${namespace}_tree_path *varname= \
      (struct ${namespace}_tree_path *) alloca( \
          ${NAMESPACE}_SIZEOF_PATH(capacity) \
-     ); \
+     );
 #define ${NAMESPACE}_INIT_STACK_PATH(path, size) \
    do { \
       (path)->len= 0; \
-      (path)->lim= ((size) - (sizeof(struct ${namespace}_tree_path)) / ${NAMESPACE}_SIZEOF_WORD(capacity); \
+      (path)->lim= ((size) - (sizeof(struct ${namespace}_tree_path)) / ${NAMESPACE}_SIZEOF_WORD(capacity)); \
       (path)->u$min_bits.bucket= 0; \
    } while(0)
 
 //include "rbhash.h"
 #include <stdint.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <assert.h>
 
 struct ${namespace}_tree_path {
@@ -104,20 +105,27 @@ struct ${namespace}_tree_path {
 };
 ## for my $bits (@bits) {
 ##   my $word_t= word_type($bits);
-extern size_t ${namespace}_tree_insert_$bits($word_t *rbhash, struct ${namespace}_tree_path *path, size_t node);
-extern size_t ${namespace}_tree_delete_$bits($word_t *rbhash, struct ${namespace}_tree_path *path);
+extern size_t ${namespace}_tree_insert_$bits($word_t *rbhash, size_t capacity, struct ${namespace}_tree_path *path, size_t node);
+extern size_t ${namespace}_tree_delete_$bits($word_t *rbhash, size_t capacity, struct ${namespace}_tree_path *path);
 ## }
 
-## for my $verb (qw( insert delete ) {
-extern bool ${namespace}_tree_$verb(void *rbhash, struct ${namespace}_tree_path *path) {
+extern size_t ${namespace}_tree_insert(void *rbhash, size_t capacity, struct ${namespace}_tree_path *path, size_t node) {
 ##   for my $bits (@bits) {
 ##     my $word_t= word_type($bits);
    if (capacity <= ${NAMESPACE}_MAX_ELEMENTS_$bits)
-      ${namespace}_tree_${verb}_$bits(($word_t*) rbhash, path);
+      ${namespace}_tree_insert_$bits(($word_t*) rbhash, capacity, path, node);
 ##   }
-   return false;
+   return 0;
 }
-## }
+
+extern size_t ${namespace}_tree_delete(void *rbhash, size_t capacity, struct ${namespace}_tree_path *path) {
+##   for my $bits (@bits) {
+##     my $word_t= word_type($bits);
+   if (capacity <= ${NAMESPACE}_MAX_ELEMENTS_$bits)
+      ${namespace}_tree_delete_$bits(($word_t*) rbhash, capacity, path);
+##   }
+   return 0;
+}
 
 /* Find a node in the hash table, or tree.  Returns the node_id, or 0 if no
  * nodes match.
@@ -136,7 +144,7 @@ size_t ${namespace}_find(
 ##   my $word_t= word_type($bits);
 ##   my $else= $bits > $min_bits? ' else':'';
   $else if (capacity <= ${NAMESPACE}_MAX_ELEMENTS_$bits) {
-      node= (($word_t *)rbhash)[ ${NAMESPACE}_TABLE_IDX(capacity, hash_code) ];
+      node= (($word_t *)rbhash)[ ${NAMESPACE}_TABLE_WORD_IDX(capacity, hash_code) ];
       while (node && (cmp= ${{$default_compare_fn->('node')}}))
          node= (($word_t *)rbhash)[ (node<<1) | (cmp < 0? 0 : 1) ] >> 1;
    }
@@ -160,14 +168,14 @@ size_t ${namespace}_find_path(
    size_t ref, node= 0;
    int cmp, p_i= 0, p_lim;
    if (!${NAMESPACE}_TABLE_BUCKETS(capacity)) { path->len= -1; return 0; }
-   NAMESPACE_INIT_STACK_PATH(path, sizeof_path);
+   ${NAMESPACE}_INIT_STACK_PATH(path, sizeof_path);
    p_lim= path->lim;
-   if (p_lim < 1) { path->ofs= -1; return 0; }
+   if (p_lim < 1) { path->len= -1; return 0; }
 ## for my $bits (@bits) {
 ##   my $word_t= word_type($bits);
 ##   my $else= $bits > $min_bits? ' else':'';
   $else if (capacity <= ${NAMESPACE}_MAX_ELEMENTS_$bits) {
-      $word_t *rbhash_w= ($word_t) rbhash;
+      $word_t *rbhash_w= ($word_t*) rbhash;
       path->u$bits.refs[0]= 0;
       node= *(
          path->u$bits.bucket= rbhash_w + ${NAMESPACE}_TABLE_WORD_OFS(capacity)
@@ -175,14 +183,14 @@ size_t ${namespace}_find_path(
       );
       while (node && (cmp= ${{$default_compare_fn->('node')}})) {
          ref= (node<<1) | (cmp < 0? 0 : 1);
-         if (++p_i >= p_lim) { *path_i= -1; return 0; }
+         if (++p_i >= p_lim) { path->len= -1; return 0; }
          path->u$bits.refs[p_i]= ref;
          node= rbhash_w[ref] >> 1;
       }
    }
 ## }
    else p_i= -1;
-   *path->len= p_i;
+   path->len= p_i;
    return node;
 }
 
@@ -199,17 +207,19 @@ extern size_t ${namespace}_insert(
    int cmp, p_i= 0, p_lim;
    ${NAMESPACE}_DECLARE_STACK_PATH(path, capacity)
    if (!${NAMESPACE}_TABLE_BUCKETS(capacity)) return 0;
-   NAMESPACE_INIT_STACK_PATH(path, ${NAMESPACE}_SIZEOF_PATH(capacity));
+   ${NAMESPACE}_INIT_STACK_PATH(path, ${NAMESPACE}_SIZEOF_PATH(capacity));
    p_lim= path->lim;
 ## for my $bits (@bits) {
 ##   my $word_t= word_type($bits);
 ##   my $else= $bits > $min_bits? ' else':'';
   $else if (capacity <= ${NAMESPACE}_MAX_ELEMENTS_$bits) {
-      $word_t *rbhash_w= ($word_t) rbhash,
+      $word_t *rbhash_w= ($word_t*) rbhash,
          *bucket= rbhash_w + ${NAMESPACE}_TABLE_WORD_OFS(capacity)
             + ${NAMESPACE}_TABLE_WORD_IDX(capacity, hash_code);
-      if (!(node= *bucket))
+      if (!(node= *bucket)) {
          *bucket= new_node;
+         return new_node;
+      }
       else {
          do {
             if (!(cmp= ${{$default_compare_fn->('node')}}))
@@ -221,13 +231,13 @@ extern size_t ${namespace}_insert(
             node= rbhash_w[ref] >> 1;
          } while (node);
          // Handle simple case of adding to black parent without invoking balance.
-         if (p_i == 1 || !(path->u$bits.refs[p_i-1] & 1)) {
-            ref= (new_node << 1) | 1;
+         if (p_i == 1 || !(rbhash_w[path->u$bits.refs[p_i-1]] & 1)) {
+            rbhash_w[ref]= (new_node << 1) | 1;
             return new_node;
          }
          path->u$bits.bucket= bucket;
          path->len= p_i+1;
-         return ${namespace}_tree_insert_$bits(rbhash_w, path, new_node);
+         return ${namespace}_tree_insert_$bits(rbhash_w, capacity, path, new_node);
       }
    }
 ## }
@@ -246,13 +256,13 @@ extern size_t ${namespace}_delete(
    int cmp, p_i= 0, p_lim;
    ${NAMESPACE}_DECLARE_STACK_PATH(path, capacity)
    if (!${NAMESPACE}_TABLE_BUCKETS(capacity)) return 0;
-   NAMESPACE_INIT_STACK_PATH(path, ${NAMESPACE}_SIZEOF_PATH(capacity));
+   ${NAMESPACE}_INIT_STACK_PATH(path, ${NAMESPACE}_SIZEOF_PATH(capacity));
    p_lim= path->lim;
 ## for my $bits (@bits) {
 ##   my $word_t= word_type($bits);
 ##   my $else= $bits > $min_bits? ' else':'';
   $else if (capacity <= ${NAMESPACE}_MAX_ELEMENTS_$bits) {
-      $word_t *rbhash_w= ($word_t) rbhash, cur, ch_ref1, ch_ref2,
+      $word_t *rbhash_w= ($word_t*) rbhash, cur, ch_ref1, ch_ref2,
          *bucket= rbhash_w + ${NAMESPACE}_TABLE_WORD_OFS(capacity)
             + ${NAMESPACE}_TABLE_WORD_IDX(capacity, hash_code);
       if ((cur= *bucket << 1)) {
@@ -283,7 +293,7 @@ extern size_t ${namespace}_delete(
          }
          path->u$bits.bucket= bucket;
          path->len= p_i+1;
-         return ${namespace}_tree_delete_$bits(rbhash_w, path);
+         return ${namespace}_tree_delete_$bits(rbhash_w, capacity, path);
       }
       else return 0;
    }
@@ -373,14 +383,13 @@ extern size_t ${namespace}_tree_insert_$bits(
          // Now we can rotate toward parent to balance the tree.
          rbhash[pos_ref]= child;
          rbhash[child_ref]= pos_ref|1; // = parent, colored red.  simplification of ((pos_ref>>1)<<1)|1
-         rbhash[parent_ref}= pos^1; // also make pos black
+         rbhash[parent_ref]= pos^1; // also make pos black
          // rotation finished, exit.
          break;
       }
    }
    // If rotated the root, store the root back into the hash bucket
-   if (parent_ref == root_ref) {
-      *path->u$bits.bucket= rbhash[root_ref] >> 1;
+   *path->u$bits.bucket= rbhash[root_ref] >> 1;
    return new_node;
 }
 ## }
@@ -418,65 +427,86 @@ extern size_t ${namespace}_tree_insert_$bits(
  *       The index of the integer referring to the left subtree of pos
  */
 ## for my $bits (@bits) {
-##   $word_t= word_type($bits);
-extern bool ${namespace}_delete_$bits(
+##   my $word_t= word_type($bits);
+extern size_t ${namespace}_tree_delete_$bits(
    $word_t *rbhash, size_t capacity,
-   struct ${namespace}_tree_path *path,
+   struct ${namespace}_tree_path *path
 ) {
    $word_t root_ref= ${NAMESPACE}_TREE_TMPROOT_IDX(capacity);
-   int p_i;
-   // If node has two children, find a leaf to swap with
-   if (rbhash[pos] && rbhash[pos^1]) {
-      $word_t tmp, orig_p_i= p_i, alt= pos, alt2, ref= (pos >> 1 << 1); // go left
-      if (++p_i >= p_lim) return -1;
-      parent_refs[p_i]= ref;
-      while ((alt= rbhash[ref= alt|1])) { // go right
-         if (++p_i >= p_lim) return -1;
-         parent_refs[p_i]= ref;
+   $word_t pos, pos_ref, *parent_refs= path->u$bits.refs, ch1, ch2, sibling;
+   int p_i= path->len-1, p_lim= path->lim;
+   // Path should be at least 1 element (which would mean to delete the root)
+   if (path->len < 1)
+      return 0;
+   // Use the temporary root-ref slot of the rbhash to point to the root node.
+   // This saves 'if' statements later.
+   parent_refs[0]= root_ref;
+   rbhash[root_ref]= *path->u$bits.bucket << 1;
+   // Now read the final ref to find 'pos_ref' and 'pos'
+   pos_ref= parent_refs[p_i];
+   pos= rbhash[pos_ref];
+   // If pos has children, find a leaf to swap with.
+   // Then delete this node in the leaf's position.
+   ch1= rbhash[pos], ch2= rbhash[pos^1];
+   if (ch1 || ch2) {
+      if (ch1 && ch2) {
+         int orig_p_i= p_i;
+         $word_t tmp, alt= pos, alt2, ref;
+         // descend one level to the left
+         if (++p_i >= p_lim) return 0;
+         parent_refs[p_i]= ref= (pos >> 1 << 1); // go left;
+         // descend as many levels as possible to the right
+         while ((alt= rbhash[ref= alt|1])) {
+            if (++p_i >= p_lim) return 0;
+            parent_refs[p_i]= ref;
+         }
+         // 'alt' is the node we swap with.
+         alt= rbhash[parent_refs[p_i]];
+         // is there one to the left?
+         if ((alt2= rbhash[alt])) {
+            assert(alt2&1);
+            // it is required to be a red leaf, so replace alt with it
+            rbhash[parent_refs[p_i]]= alt2^1;
+            rbhash[alt2]= 0;
+            rbhash[alt2^1]= 0;
+            // Now substitute this for pos and we're done.
+            rbhash[alt >> 1 << 1]= rbhash[pos >> 1 << 1];
+            rbhash[alt|1]= rbhash[pos|1];
+            rbhash[pos_ref]= (alt >> 1 << 1) | (pos&1); // preserve color of pos
+         }
+         else {
+            // swap colors of alt and pos
+            alt ^= pos & 1;
+            pos ^= alt & 1;
+            alt ^= pos & 1;
+            rbhash[alt|1]= rbhash[pos|1];         // copy right
+            rbhash[(alt|1)^1]= rbhash[(pos|1)^1]; // copy left
+            rbhash[pos_ref]= alt;
+            if (pos & 1)
+               // read leaf, remove it
+               rbhash[parent_refs[p_i]]= 0;
+            else {
+               // black leaf, need balancing
+               pos_ref= parent_refs[p_i];
+               rbhash[pos_ref]= pos;
+               rbhash[pos]= 0;
+               rbhash[pos^1]= 0;
+               // pos and alt are in reverse sort-order, but we're deleting pos now.
+               goto del_black_leaf; // https://xkcd.com/292/
+            }
+         }  
       }
-      alt= rbhash[parent_refs[p_i]] >> 1 << 1;
-      // is there one to the left?
-      if ((alt2= rbhash[alt]>>1<<1)) {
-         // it is a red leaf by definition, so replace alt with it
-         rbhash[parent_refs[p_i]]= alt2;
-         rbhash[alt2]= 0;
-         rbhash[alt2+1]= 0;
-         // Now substitute this for pos and we're done.
-         rbhash[alt]= rbhash[pos >> 1 << 1];
-         rbhash[alt+1]= rbhash[pos|1];
-         if (orig_p_i) rbhash[parent_refs[orig_p_i]]= alt | (rbhash[parent_refs[orig_p_i]]&1);
-         else parent_refs[0]= alt;
-         return orig_p_i;
+      else {
+         // Node is black with one child.  Swap with it.
+         rbhash[pos_ref]= (ch1 | ch2) >> 1 << 1; // and make it black
       }
-      // swap them
-      rbhash[alt]= rbhash[pos>>1<<1];
-      rbhash[alt+1]= rbhash[pos|1];
-      rbhash[pos>>1<<1]= 0;
-      rbhash[pos|1]= 0;
-      rbhash[parent_refs[p_i]]= (pos >>1 <<1) | (rbhash[parent_refs[p_i]]&1);
-      if (orig_p_i) { // i.e. not the root node
-         rbhash[parent_refs[orig_p_i]]= alt | (rbhash[parent_refs[orig_p_i]]&1);
-         parent_refs[orig_p_i+1]= alt | (parent_refs[orig_p_i+1]&1);
-      }
-      // pos and alt are in reverse sort-order, but we're deleting pos now.
    }
-   
-   // Node doesn't have two children.  If node is red, just remove it.
-   if (pos&1) {
-      if (p_i) rbhash[parent_refs[p_i]]= 0;
-   }
-   // Node is black, maybe one child?  Swap with it.
-   if (rbhash[pos]) {
-      if (p_i) rbhash[parent_refs[p_i]]= rbhash[pos] >> 1 << 1;
-      else parent_refs[p_i]= rbhash[pos] >> 1 << 1;
-   }
-   else if (rbhash[pos^1]) {
-      if (p_i) rbhash[parent_refs[p_i]]= rbhash[pos^1] >> 1 << 1;
-      else parent_refs[p_i]= rbhash[pos^1] >> 1 << 1;
-   }
+   // Now, pos is a leaf node.  If it is red, just remove it.
+   else if (pos&1)
+      rbhash[pos_ref]= 0;
+   // Black node with no children.  Now it gets interesting.
    else {
-      // Black node with no children.  Now it gets interesting.
-      
+      del_black_leaf:
       // The tree must have the same number of black nodes along any path from root
       // to leaf.  We want to remove a black node, disrupting the number of black
       // nodes along the path from the root to the current leaf.  To correct this,
@@ -484,7 +514,7 @@ extern bool ${namespace}_delete_$bits(
       // path.
 
       // Loop until the current node is red, or until we get to the root node.
-      $word_t pos_ref= *parent_refs[p_i], sibling= rbhash[pos_ref^1];
+      sibling= rbhash[pos_ref^1];
       do {
          $word_t near_nephew_ref, near_nephew;
          // If the sibling is red, we are unable to reduce the number of black
@@ -504,7 +534,7 @@ extern bool ${namespace}_delete_$bits(
             rbhash[pos_ref^1]= sibling;
             rbhash[near_nephew_ref]= pos_ref|1; // former sibling sameside tree = parent, now red
             if (++p_i >= p_lim)
-               return -1;
+               return 0;
             parent_refs[p_i] = near_nephew_ref; // insert new parent into list
          }
          // sibling will be black here
@@ -519,7 +549,7 @@ extern bool ${namespace}_delete_$bits(
             rbhash[pos_ref^1] |= 1; // change sibling to red
             // Now we move one level up the tree to continue fixing the
             // other branches.
-            if (!p_i) break;
+            if (p_i < 1) break;
             pos_ref= parent_refs[p_i--];
             if (rbhash[pos_ref]&1) {
                // Now, make the current node black (to fulfill Case 2b)
@@ -542,29 +572,32 @@ extern bool ${namespace}_delete_$bits(
             //  so we are done.
             if (near_nephew&1) {
                // Case 3 from the text, double rotation
-               $word_t tmp_ref= near_nephew ^ (pos_ref&1) // near nephew's far child
+               $word_t tmp_ref= near_nephew ^ (pos_ref&1); // near nephew's far child
                rbhash[near_nephew_ref]= rbhash[tmp_ref];
                rbhash[pos_ref^1]= near_nephew;
                rbhash[tmp_ref]= sibling;
                sibling= near_nephew ^ 1; // make it black
                near_nephew_ref= sibling | (pos_ref&1);
             }
-            // now Case 4 from the text
             else
                rbhash[near_nephew_ref^1] ^= 1; // far nephew becomes black
+            // now Case 4 from the text
             assert(sibling > 1);
             rbhash[pos_ref^1]= rbhash[near_nephew_ref];
-            rbhash[near_nephew_ref]= pos_ref >>1 <<1; // parent becomes black, balancing current path
+            // parent becomes black, balancing current path
+            rbhash[near_nephew_ref]= pos_ref >> 1 << 1; 
             // Sibling assumes parent's color and position
-            if (p_i)
-               rbhash[parent_refs[p_i]]= sibling|(rbhash[parent_refs[p_i]]&1);
-            else
-               parent_refs[0]= sibling;
-            return p_i;
+            rbhash[parent_refs[p_i]]= sibling | (rbhash[parent_refs[p_i]]&1);
+            break;
          }
       } while (pos_ref > 1);
    }
-   return p_i;
+   // in case root_ref changed
+   *path->u$bits.bucket= rbhash[root_ref] >> 1;
+   // clean the 'pos' node for future use
+   rbhash[pos]= 0;
+   rbhash[pos^1]= 0;
+   return pos >> 1;
 }
 ## }
 
@@ -586,7 +619,7 @@ static size_t ${namespace}_treeprint_$bits(
    int i, pos, step= 0;
    size_t nodecount= 0;
    if (!node) {
-      fprintf(out, "(empty tree)\n");
+      fputs("(empty tree)\n", out);
       return 0;
    }
    node_path[0]= 0;
@@ -609,12 +642,12 @@ static size_t ${namespace}_treeprint_$bits(
       case 1:
          // Print tree branches for nodes up until this one
          for (i= 2; i < pos; i++)
-            fprintf(out, (node_path[i]&1) == (node_path[i+1]&1)? "    " : "   |");
+            fputs((node_path[i]&1) == (node_path[i+1]&1)? "    " : "   |", out);
          if (pos > 1)
-            fprintf(out, (node_path[pos]&1)? "   `" : "   ,");
+            fputs((node_path[pos]&1)? "   `" : "   ,", out);
          
          // Print content of this node
-         fprintf(out, "--%c%c%c #%ld%s",
+         fprintf(out, "--%c%c%c #%ld%s ",
             (node == mark_node? '(' : '-'),
             (node > max_node? '!' : (rbhash[ (node_path[pos-1]|1) ^ (node_path[pos]&1) ]&1)? 'R':'B'),
             (node == mark_node? ')' : ' '),
@@ -625,7 +658,7 @@ static size_t ${namespace}_treeprint_$bits(
                : ""
          );
          if (print_node) print_node(userdata, node, out);
-         else fputs("\n");
+         fputs("\n", out);
          ++nodecount;
          
          // Proceed down left subtree if possible
@@ -657,7 +690,7 @@ void ${namespace}_print(
 ##   my $else= $bits > $min_bits? ' else':'';
   $else if (capacity <= ${NAMESPACE}_MAX_ELEMENTS_$bits) {
       $word_t *nodes= ($word_t*) rbhash;
-      $word_t *table= nodes + (1 + capacity)*2;
+      $word_t *table= nodes + ${NAMESPACE}_TABLE_WORD_OFS(capacity);
       int i;
       for (i= 0; i < n_buckets; i++) {
          if (i && (i & 0xF) == 0)
@@ -673,22 +706,48 @@ void ${namespace}_print(
    fprintf(out, "# used %ld / %ld buckets, %ld collisions\n", (long) used, (long) n_buckets, (long) collision);
 }
 
-int cmp_el(void*data, size_t node) {
-   int *el= (int*) data;
-   return el[el[0]] < el[node]? -1 : el[el[0]] > el[node]? 1 : 0;
+struct cmp_args {
+   int *el;
+   int hash_code;
+   int key;
+};
+
+int cmp_el(void *datap, size_t node) {
+   struct cmp_args *data= (struct cmp_args *) datap;
+   return data->key < data->el[node]? -1 : data->key > data->el[node]? 1 : 0;
+}
+void print_node(void *datap, size_t node, FILE *out) {
+   struct cmp_args *data= (struct cmp_args *) datap;
+   fprintf(out, "%ld", (long) data->el[node]);
 }
 
 #define N 16
 int main() {
    int el[N];
-   uint8_t words[RBHASH_SIZE(N)];
+   struct cmp_args cmp_args= { el, 0, 0 };
+   uint8_t words[RBHASH_SIZEOF(N)];
    memset(el, 0, sizeof(el));
    memset(words, 0, sizeof(words));
+   el[0]= 0;
    while (el[0] < N) {
-      if (!scanf("%d", el+1+el[0])) return 0;
-      el[0]++;
-      if (rbhash_insert(words, N, el[0], 0, el, cmp_el) != el[0])
-         return 1;
-      rbhash_print(words, N, stdout);
+      if (!scanf("%d", &cmp_args.key)) return 0;
+      if (cmp_args.key < 0) {
+         int x= rbhash_delete(words, N, 0, &cmp_args, cmp_el);
+         if (x) printf("Deleted node %ld\n", (long)x);
+         else printf("Not found, or err\n");
+      }
+      else if (cmp_args.key > 0) {
+         if (el[0] >= N-1)
+            printf("Array full\n");
+         else {
+            el[++el[0]]= cmp_args.key;
+            int x= rbhash_insert(words, N, el[0], 0, &cmp_args, cmp_el);
+            if (x != el[0])
+               printf("insert failed: %ld\n", (long) x);
+            else
+               printf("inserted as node %ld\n", (long) x);
+         }
+      }
+      rbhash_print(words, N, &cmp_args, print_node, stdout);
    }
 }
