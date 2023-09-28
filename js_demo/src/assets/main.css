@@ -1,0 +1,9 @@
+html {
+   background-color: white;
+   color: black;
+}
+body {
+   display: flex;
+   flex-direction: column;
+   align-items: stretch;
+}
