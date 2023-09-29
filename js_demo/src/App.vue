@@ -12,6 +12,7 @@ const hash_function= ref('sum')
 const enable_step= ref(false);
 const op_in_progress= ref(false);
 const next_key= ref();
+const vis= ref(null);
 
 const messages= ref([]);
 
@@ -35,6 +36,7 @@ function step() {
    if (step_promise) {
       step_promise.resolve(true);
       step_promise= null;
+      vis.value.render();
    }
 }
 function get_step_promise() {
@@ -72,6 +74,7 @@ async function add_value() {
       console.log(e);
    }
    op_in_progress.value= false;
+   vis.value.render();
 }
 
 function delete_value(value) {
@@ -105,7 +108,7 @@ resize_rbhash(8);
             <label>Step-by-Step <input type="checkbox" v-model="enable_step"></label>
             <button type="button" @click="step()" :disabled="!enable_step">Step</button>
          </div>
-         <RBHashVisualizer :rbhash=rbhash :user_array=user_array />
+         <RBHashVisualizer ref="vis" :rbhash=rbhash :user_array=user_array />
          <div>
             <div v-for="line in messages">{{ line }}</div>
          </div>
