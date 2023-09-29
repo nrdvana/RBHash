@@ -354,17 +354,9 @@ extern size_t ${namespace}_tree_insert_$bits(
          break;
       // pos is red, its new child is red, and parent will be black.
       // if the sibling is also red, we can pull down the color black from the parent
-      if (rbhash[pos_ref^1]&1) {
-         rbhash[pos_ref^1] ^= 1;     // toggle color of sibling
-         rbhash[pos_ref]= pos^1;     // toggle color of pos
-         rbhash[parent_ref] ^= 1;    // toggle color of parent
-         // Now pos is black.
-         // Jump twice up the tree so that once again, pos has one red child.
-         p_i--;
-      }
-      else {
-         // Need a rotation.
-         // sibling is black.
+      // if not, need a rotation.
+      if (!(rbhash[pos_ref^1]&1)) {
+         // Sibling is black, need a rotation
          // if the imbalanced child (red node) is on the same side as the parent,
          //  need to rotate those lower nodes to the opposite side in preparation
          //  for the rotation.
@@ -391,6 +383,12 @@ extern size_t ${namespace}_tree_insert_$bits(
          // rotation finished, exit.
          break;
       }
+      rbhash[pos_ref^1] ^= 1;     // toggle color of sibling
+      rbhash[pos_ref]= pos^1;     // toggle color of pos
+      rbhash[parent_ref] ^= 1;    // toggle color of parent
+      // Now pos is black.
+      // Jump twice up the tree so that once again, pos has one red child.
+      p_i--;
    }
    // If rotated the root, store the root back into the hash bucket
    *path->u$bits.bucket= rbhash[root_ref] >> 1;

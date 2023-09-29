@@ -71,24 +71,9 @@ export default class RBHash {
             }
             // pos is red, its new child is red, and parent will be black.
             // if the sibling is also red, we can pull down the color black from the parent
-            if (rbhash[pos_ref^1] & 1) {
-               state.message.push('Node is Red with Red sibling')
-               state.message.push('Pull down Black color from parent')
-               state.highlight[pos_ref]= 'write';
-               state.highlight[pos_ref^1]= 'write';
-               state.highlight[parent_ref]= 'write';
-               if (showstate) await showstate(state);
-               
-               rbhash[pos_ref] ^= 1;       // toggle color of pos
-               rbhash[pos_ref^1] ^= 1;     // toggle color of sibling
-               rbhash[parent_ref] ^= 1;    // toggle color of parent
-               // Now pos is black.
-               // Jump twice up the tree so that once again, pos has one red child.
-               path.pop();
-            }
-            else {
-               // Need a rotation.
-               // sibling is black.
+            // if not, need a rotation.
+            if (!(rbhash[pos_ref^1] & 1)) {
+               // Sibling is black, need a rotation.
                state.message.push('Node is Red with Black sibling. Need a rotation.')
                // if the imbalanced child (red node) is on the same side as the parent,
                //  need to rotate those lower nodes to the opposite side in preparation
@@ -120,6 +105,19 @@ export default class RBHash {
                // rotation finished, exit.
                break;
             }
+            state.message.push('Node is Red with Red sibling')
+            state.message.push('Pull down Black color from parent')
+            state.highlight[pos_ref]= 'write';
+            state.highlight[pos_ref^1]= 'write';
+            state.highlight[parent_ref]= 'write';
+            if (showstate) await showstate(state);
+            
+            rbhash[pos_ref] ^= 1;       // toggle color of pos
+            rbhash[pos_ref^1] ^= 1;     // toggle color of sibling
+            rbhash[parent_ref] ^= 1;    // toggle color of parent
+            // Now pos is black.
+            // Jump twice up the tree so that once again, pos has one red child.
+            path.pop();
          }
          state.message.push('Tree is balanced');
          state.finished= true;
