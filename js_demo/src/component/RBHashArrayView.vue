@@ -1,26 +1,26 @@
 <script setup>
 const props= defineProps({
    rbhash: Object,
-   visual_cues: Object,
+   user_array: Object,
 })
 
 function nodeused(i) {
-   return props.rbhash.array[i-1] != null;
+   return props.user_array[i-1] != null;
 }
 function noderef(i, right) {
-   return props.rbhash.array[ props.rbhash.capacity + i*2 + right ] >> 1;
+   return props.rbhash.array[ i*2 + right ] >> 1;
 }
 function noderef_is_red(i, right) {
-   return props.rbhash.array[ props.rbhash.capacity + i*2 + right ] & 1;
+   return props.rbhash.array[ i*2 + right ] & 1;
 }
 function rootref() {
-   return props.rbhash.array[ props.rbhash.capacity*2 + 3 ];
+   return props.rbhash.array[ props.rbhash.root_ref_ofs ];
 }
 function n_buckets() {
-   return props.rbhash.array.length - (props.rbhash.capacity*3+3);
+   return props.rbhash.n_buckets;
 }
 function bucket(i) {
-   return props.rbhash.array[ props.rbhash.capacity*3 + 3 + i ];
+   return props.rbhash.array[ props.rbhash.table_ofs + i ];
 }
 
 </script>
@@ -53,13 +53,13 @@ function bucket(i) {
          <div :class="'noderef ' + (!nodeused(i)? 'empty' : !noderef(i,0)? '' : noderef_is_red(i, 0)? 'red' : 'black') ">
             {{ noderef(i, 0) }}
          </div>
-         <div :class="'noderef ' + (!nodeused(i)? 'empty' : !noderef(i,0)? '' : noderef_is_red(i, 1)? 'red' : 'black') ">
+         <div :class="'noderef ' + (!nodeused(i)? 'empty' : !noderef(i,1)? '' : noderef_is_red(i, 1)? 'red' : 'black') ">
             {{ noderef(i, 1) }}
          </div>
       </div>
    </td>
    <td :class="'user-el ' + (nodeused(i)? 'full' : 'empty') ">
-      {{ nodeused(i)? '"' + rbhash.array[ i - 1 ] + '"' : '-' }}
+      {{ nodeused(i)? '"' + user_array[i-1] + '"' : '-' }}
    </td>
 </tr>
 <tr>
