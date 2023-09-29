@@ -355,8 +355,8 @@ extern size_t ${namespace}_tree_insert_$bits(
       // pos is red, its new child is red, and parent will be black.
       // if the sibling is also red, we can pull down the color black from the parent
       if (rbhash[pos_ref^1]&1) {
-         rbhash[pos_ref] ^= 1;       // toggle color of pos
          rbhash[pos_ref^1] ^= 1;     // toggle color of sibling
+         rbhash[pos_ref]= pos^1;     // toggle color of pos
          rbhash[parent_ref] ^= 1;    // toggle color of parent
          // Now pos is black.
          // Jump twice up the tree so that once again, pos has one red child.
@@ -369,7 +369,7 @@ extern size_t ${namespace}_tree_insert_$bits(
          //  need to rotate those lower nodes to the opposite side in preparation
          //  for the rotation.
          // e.g. if pos_ref is leftward (even) and pos's rightward child (odd) is the red one...
-         $word_t child_ref= (pos|1) ^ (pos_ref&1);
+         $word_t child_ref= pos ^ (pos_ref&1);
          $word_t child= rbhash[child_ref];
          if (child&1) {
             // rotate pos toward [side] so parent's [side] now points to pos's [otherside]
