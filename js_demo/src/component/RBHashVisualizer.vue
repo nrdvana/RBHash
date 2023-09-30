@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, watch, onMounted } from 'vue'
 
 const props= defineProps({
    rbhash: Object,
@@ -80,26 +80,59 @@ function render_subtree(layout, node, x, y, ctx) {
 }
 
 function render_layout(layout, ctx, canvas_width) {
-   let empty_bucket_count= layout.n_buckets - Object.keys(layout.table).length
-   let empty_bucket_dx= 3
    let node_dx= layout.node_dx
-   // widen empty buckets to use space not used by nodes
-   if (layout.node_width_sum * props.node_size + empty_bucket_count * empty_bucket_dx < canvas_width)
-      empty_bucket_dx= (canvas_width - layout.node_width_sum * node_dx) / empty_bucket_count;
+   // make a list of the widest buckets
+   let widest= Object.values(layout.table)
+      .map((bucket) => bucket.node.width * node_dx)
+      .sort()
+   let widest_sum= widest.reduce((ret, cur) => ret + cur, 0);
+   let standard_bucket_count= layout.n_buckets - widest.length
+   let standard_bucket_dx;
+   // Does the minimal width of all the nodes occupy all the space?
+   if (widest_sum >= canvas_width) {
+      standard_bucket_dx= 3
+   } else {
+      // for each small node, can we make all buckets at least this large without running out of room?
+      while (widest.length && (widest_sum - widest[0]) + (widest[0] * standard_bucket_count) <= canvas_width) {
+         console.log(widest_sum, widest.concat([]), standard_bucket_count)
+         // convert least-wide to a standard bucket width
+         widest_sum -= widest[0]
+         widest.shift();
+         standard_bucket_count++
+      }
+         console.log(widest_sum, widest.concat([]), standard_bucket_count)
+      // divide remaiing space among the standard buckets
+      standard_bucket_dx= (canvas_width - widest_sum) / standard_bucket_count;
+   }
    // render each filled bucket, first rendering the empty buckets to the left.
    let x= 0
-   let last_b= -1
-   Object.keys(layout.table).sort((a,b) => parseInt(a) < parseInt(b)).forEach((b) => {
-      // render buckets last_b+1 .. b-1
+   for (let b= 0; b < layout.n_buckets; b++) {
+      // bucket left edge
       ctx.lineWidth= 1
       ctx.strokeStyle= '#333'
-      for (let i= last_b+1; i < b; i++) {
-         x += empty_bucket_dx
-         ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, 10); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, 20); ctx.stroke();
+      let dx;
+      // bucket tree
+      if (layout.table[b]) {
+         let node= layout.table[b].node
+         let tree_dx= node_dx * node.width
+         dx= Math.max(tree_dx, standard_bucket_dx)
+         render_subtree(layout, node, x + (dx - tree_dx)/2, 15, ctx)
+      } else {
+         dx= standard_bucket_dx
       }
-      // render tree
-      render_subtree(layout, layout.table[b].node, x, 10, ctx);
-   });
+      // bucket label, if room
+      if (dx > 15) {
+         ctx.textAlign = 'center'
+         ctx.textBaseline = 'top'
+         ctx.fillText(b, x + dx/2, 2)
+      }
+      x += dx
+   }
+   // bucket right edge
+   ctx.lineWidth= 1
+   ctx.strokeStyle= '#333'
+   ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, 20); ctx.stroke();
 }
 
 const canvas= ref(null);
@@ -116,6 +149,7 @@ function render() {
    render_layout(new_layout, ctx, canvas.value.width)
 }
 onMounted(render)
+watch(() => props.rbhash, render)
 
 defineExpose({
    render: render
@@ -129,5 +163,5 @@ defineExpose({
 </template>
 
 <style scoped>
-canvas { border: 1px solid black; min-width: 600px; min-height: 400px; }
+canvas { border: none; min-width: 600px; min-height: 400px; width: 100%; }
 </style>

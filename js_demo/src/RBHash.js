@@ -16,7 +16,7 @@ export default class RBHash {
       let bucket= hash_code % this.n_buckets;
       let bucket_ofs= this.table_ofs + bucket;
       let state= {
-         message: ["Hash code "+hash_code+" % "+this.n_buckets+" = "+bucket],
+         message: ["Hash code "+hash_code+" mod "+this.n_buckets+" = "+bucket],
          highlight: { [bucket_ofs]: 'test' },
          newnode_at: bucket_ofs
       };

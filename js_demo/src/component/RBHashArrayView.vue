@@ -28,12 +28,14 @@ function bucket(i) {
 <template>
 <table>
 <caption>
-   {{ rbhash.capacity }} element capacity,<br>
-   {{ rbhash.capacity+1 }} R/B nodes + 1 temporary root-ref,<br>
-   {{ (rbhash.array.length - (rbhash.capacity*3+3)) }} hash buckets<br>
+   1 sentinel node<br>
+   + {{ rbhash.capacity }} nodes for user array<br>
+   + 1 temporary root-ref<br>
+   + {{ rbhash.array.length - rbhash.table_ofs }} hash buckets<br>
+   = {{ rbhash.array.length * ( rbhash.array.length <= 0x7E? 1 : rbhash.array.length <= 0x7FFE? 2 : 4 ) }} bytes
 </caption>
 <tr>
-   <th>R/B Hash Array</th>
+   <th>R/B Node Array</th>
    <th>User Array</th>
 </tr>
 <tr class="first-data-row">
@@ -74,7 +76,7 @@ function bucket(i) {
    </td>
    <td class="user-el blank">&nbsp;</td>
 </tr>
-<tr><th colspan=2>Hash Table</th></tr>
+<tr><th>Hash Table</th></tr>
 <tr v-for="i in parseInt((n_buckets() + 3)/4)">
    <td class="bucket">
       <template v-for="j in 4">
@@ -92,7 +94,8 @@ function bucket(i) {
 table { border-collapse: collapse; width: auto; min-width: 200px; width: 200px; }
 caption { text-align: left; padding: 8px 0; font-size: 90%; }
 th { text-align: left; min-width: 8em; font-family: sans-serif; text-decoration: underline; }
-td { padding: 0 12px; }
+th:first-child { text-align: right; padding-right: 20px; }
+td:first-child { padding: 0 20px 0 0; }
 td.blank { visibility: hidden; }
 .user-el { width: auto; padding: 4px; }
 .node, .bucket {
