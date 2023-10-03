@@ -41,7 +41,7 @@ export default class RBHash {
                state.message.push("Found a duplicate, will not insert");
                state.finished= true;
                if (showstate) await showstate(state)
-               return node;
+               return at_node;
             }
             let ref= (at_node<<1) | (cmp < 0? 0 : 1);
             path.push(ref);

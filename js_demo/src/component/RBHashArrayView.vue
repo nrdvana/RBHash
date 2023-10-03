@@ -28,11 +28,10 @@ function bucket(i) {
 <template>
 <table>
 <caption>
-   1 sentinel node<br>
-   + {{ rbhash.capacity }} nodes for user array<br>
+   {{ rbhash.capacity }} + 1 nodes for user array &amp; Sentinel<br>
    + 1 temporary root-ref<br>
    + {{ rbhash.array.length - rbhash.table_ofs }} hash buckets<br>
-   = {{ rbhash.array.length * ( rbhash.array.length <= 0x7E? 1 : rbhash.array.length <= 0x7FFE? 2 : 4 ) }} bytes
+   = {{ rbhash.array.length * ( rbhash.capacity <= 0x7E? 1 : rbhash.capacity <= 0x7FFE? 2 : 4 ) }} bytes
 </caption>
 <tr>
    <th>R/B Node Array</th>

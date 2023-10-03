@@ -15,7 +15,7 @@ const vis= ref(null);
 const messages= ref([]);
 
 const user_array= ref([])
-const rbhash= ref(recreate_rbhash(8))
+const rbhash= ref(recreate_rbhash(15))
 
 watch([ hashtable_size_factor, hash_function ], () => {
    rbhash.value= recreate_rbhash(rbhash.value.capacity)
@@ -102,16 +102,18 @@ async function add_value() {
       let value= next_key.value;
       if (user_array.value.length >= rbhash.value.capacity)
          rbhash.value= recreate_rbhash(rbhash.value.capacity? rbhash.value.capacity*2 : 16);
+      // insert into user array first so that rendering mid-algorithm doesn't fail
+      user_array.value.push(value);
       let ins_found= await rbhash.value.insert(
-         user_array.value.length+1,
+         user_array.value.length,
          hashfunc(value),
          (j) => value.localeCompare(user_array.value[j-1]),
          (state) => { messages.value= [].concat(state.message); return get_step_promise() }
       );
-      if (ins_found == user_array.value.length+1) {
-         user_array.value.push(value);
-         next_key.value= '';
-      }
+      if (ins_found == user_array.value.length)
+         next_key.value= ''
+      else // remove the item from the array if the insert didn't succeed
+         user_array.value.pop();
    }
    catch (e) {
       console.log(e);
