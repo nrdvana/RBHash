@@ -333,7 +333,7 @@ function animate(enable) {
 }
 
 function render() {
-   console.log('render', !!canvas.value);
+   //console.log('render', !!canvas.value);
    if (!canvas.value) return
    let rect= canvas.value.getBoundingClientRect()
    let scale= window.devicePixelRatio || 1;
@@ -343,7 +343,7 @@ function render() {
    rerender()
 }
 function rerender() {
-   console.log('rerender', !!canvas.value, JSON.stringify(props.markup.insert_at), anim_layout.nodes);
+   //console.log('rerender', !!canvas.value, JSON.stringify(props.markup.insert_at), anim_layout.nodes);
    if (!canvas.value) return
    let scale= window.devicePixelRatio || 1;
    let ctx= canvas.value.getContext('2d')
@@ -355,7 +355,7 @@ function rerender() {
 
 // Render when canvas is first created, and every time props.rbhash changes
 onMounted(render)
-watch(props.rbhash, render)
+watch(() => props.rbhash, render)
 watch(props.markup, (m) => { m.insert_at? render() : rerender() })
 
 defineExpose({ render: render })

@@ -5,21 +5,43 @@ import RBHashVisualizer from './component/RBHashVisualizer.vue'
 import RBHash from './RBHash.js'
 
 const show_description= ref(true)
-const hashtable_size_factor= ref(1.0)
 const hash_function= ref('sum')
-const enable_step= ref(false);
+const rbhash_capacity= ref(15);
+const rbhash_buckets= ref(16);
 const search_key= ref();
-const vis= ref(null);
+const enable_step= ref(false);
 const step_promise= ref(null);
+const vis= ref(null);
 const messages= ref([]);
 
 const user_array= ref([])
-const rbhash= ref(recreate_rbhash(15))
+const rbhash= ref()
 const vis_markup= ref({})
 
-watch([ hashtable_size_factor, hash_function ], () => {
-   rbhash.value= recreate_rbhash(rbhash.value.capacity)
-});
+function _build_rbhash() {
+   let new_capacity= parseInt(rbhash_capacity.value),
+       new_buckets=  parseInt(rbhash_buckets.value),
+       new_hash= hash_function.value
+   // This gets called by event handlers, so don't recreate unless the params differ
+   if (rbhash.value
+      && rbhash.value.capacity == new_capacity && rbhash.value.n_buckets == new_buckets
+      && rbhash.value.hash_type == new_hash)
+      return;
+   // Chop off user_array if the user asked to shrink it
+   if (user_array.value.length > new_capacity)
+      user_array.value.splice(new_capacity, user_array.value.length - new_capacity)
+   // create and populate new rbhash
+   let new_rbh= new RBHash(new_capacity, new_buckets)
+   new_rbh.hash_type= new_hash
+   new_rbh.batch_insert(
+      user_array.value.length,
+      (i) => hashfunc(user_array.value[i-1]),
+      (i,j) => user_array.value[i-1].localeCompare(user_array.value[j-1])
+   )
+   return rbhash.value= new_rbh
+}
+watch(hash_function, _build_rbhash);
+_build_rbhash()
 
 function hashfunc(str) {
    if (hash_function.value == 'sum') {
@@ -66,17 +88,6 @@ function hashfunc(str) {
    return 0;
 }
 
-function recreate_rbhash(new_capacity) {
-   let n_buckets= parseInt(new_capacity * parseFloat(hashtable_size_factor.value));
-   let new_rbh= new RBHash(new_capacity, n_buckets);
-   new_rbh.batch_insert(
-      user_array.value.length,
-      (i) => hashfunc(user_array.value[i-1]),
-      (i,j) => user_array.value[i-1].localeCompare(user_array.value[j-1])
-   )
-   return new_rbh;
-}
-
 function step() {
    if (step_promise.value) {
       step_promise.value.resolve(true);
@@ -85,7 +96,7 @@ function step() {
    }
 }
 function get_step_promise(state) {
-   console.log('get_step_promise', JSON.stringify(state), JSON.stringify(vis_markup.value), !!step_promise.value)
+   //console.log('get_step_promise', JSON.stringify(state), JSON.stringify(vis_markup.value), !!step_promise.value)
    if (step_promise.value == null) {
       if (!enable_step.value)
          return null;
@@ -102,7 +113,7 @@ function get_step_promise(state) {
          step_promise.value.reject= rej;
       }
    }
-   console.log(JSON.stringify(vis_markup.value));
+   //console.log(JSON.stringify(vis_markup.value));
    return step_promise.value;
 }
 
@@ -133,8 +144,11 @@ async function add_value() {
       return;
    try {
       let key= search_key.value;
-      if (user_array.value.length >= rbhash.value.capacity)
-         rbhash.value= recreate_rbhash(rbhash.value.capacity? rbhash.value.capacity*2 : 16);
+      if (user_array.value.length >= rbhash.value.capacity) {
+         rbhash_capacity.value= rbhash_capacity.value * 2
+         rbhash_buckets.value=  rbhash_buckets.value * 2
+         _build_rbhash()
+      }
       // insert into user array first so that rendering mid-algorithm doesn't fail
       user_array.value.push(key);
       let ins_found= await rbhash.value.insert(
@@ -197,9 +211,9 @@ function delete_value(value) {
                <option value="zero">The Number Zero</option>
                </select>
             </label>
-            <label>Hash Table Size Factor:
-               <input name="hashtable_size_factor" type="text" pattern="[0-9]*(\.?[0-9]+)"
-                  v-model="hashtable_size_factor" @keyup.enter="rbhash= recreate_rbhash(rbhash.capacity)">
+            <label>RBHash
+               Capacity <input class="rbparam" type="text" pattern="[0-9]+" v-model="rbhash_capacity" @keyup.enter="_build_rbhash()">
+               Buckets  <input class="rbparam" type="text" pattern="[0-9]+" v-model="rbhash_buckets"  @keyup.enter="_build_rbhash()">
             </label>
          </div>
          <RBHashArrayView :rbhash=rbhash :user_array=user_array :markup=vis_markup />
@@ -248,6 +262,7 @@ h3 { margin: 8px; padding: 0px; }
    display: flex;
    flex-direction: column;
 }
+.config .rbparam { width: 3em; text-align: center; }
 .control {
    display: flex; gap: 8px;
 }
