@@ -60,6 +60,9 @@ function hashfunc(str) {
       hash ^= hash >> 16;
       return hash;
    }
+   if (hash_function.value == 'firstlast') {
+      return (str.codePointAt(0) << 8) ^ str.codePointAt(str.length-1);
+   }
    return 0;
 }
 
@@ -190,6 +193,7 @@ function delete_value(value) {
                <select name="hash_function" v-model="hash_function">
                <option value="murmur">MurmurHash32</option>
                <option value="sum">Sum of Characters</option>
+               <option value="firstlast">First and Last Character</option>
                <option value="zero">The Number Zero</option>
                </select>
             </label>
