@@ -1,5 +1,5 @@
 <script setup>
-import { ref, watch } from 'vue'
+import { ref, triggerRef, watch } from 'vue'
 import RBHashArrayView from './component/RBHashArrayView.vue'
 import RBHashVisualizer from './component/RBHashVisualizer.vue'
 import RBHash from './RBHash.js'
@@ -44,6 +44,8 @@ watch(hash_function, _build_rbhash);
 _build_rbhash()
 
 function hashfunc(str) {
+   if (str == null)
+      return null
    if (hash_function.value == 'sum') {
       let x= 0;
       for (let i= 0; i < str.length; i++)
@@ -90,9 +92,9 @@ function hashfunc(str) {
 
 function step() {
    if (step_promise.value) {
-      step_promise.value.resolve(true);
-      step_promise.value= null;
-      //vis.value.render();
+      step_promise.value.resolve(true)
+      step_promise.value= null
+      triggerRef(rbhash)
    }
 }
 function get_step_promise(state) {
@@ -102,10 +104,11 @@ function get_step_promise(state) {
          return null;
       if (state.message)
          messages.value= [].concat(state.message)
-      if (state.highlight)
-         vis_markup.value.highlight= state.highlight
-      if (state.insert_at)
-         vis_markup.value.insert_at= state.insert_at
+      // Allow the callback to communicate that the element has been deleted at this stage
+      if (state.deleted_id)
+         user_array.value[state.deleted_id-1]= null
+      vis_markup.value.highlight= state.highlight
+      vis_markup.value.insert_at= state.insert_at
       if (!state.finished) {
          let res, rej;
          step_promise.value= new Promise((resolve, reject) => { res= resolve; rej= reject; });
@@ -150,17 +153,27 @@ async function add_value() {
          _build_rbhash()
       }
       // insert into user array first so that rendering mid-algorithm doesn't fail
-      user_array.value.push(key);
+      let node_id;
+      for (node_id= 1; node_id <= user_array.value.length; node_id++)
+         if (user_array.value[node_id-1] === null)
+            break;
+      if (node_id > user_array.value.length)
+         user_array.value.push(key)
+      else
+         user_array.value[node_id-1]= key;
       let ins_found= await rbhash.value.insert(
-         user_array.value.length,
+         node_id,
          hashfunc(key),
          (j) => key.localeCompare(user_array.value[j-1]),
          (state) => get_step_promise(state),
       );
-      if (ins_found == user_array.value.length)
+      if (ins_found == node_id)
          search_key.value= ''
-      else // remove the item from the array if the insert didn't succeed
-         user_array.value.pop();
+      else { // remove the item from the array if the insert didn't succeed
+         user_array.value[node_id-1]= null
+         if (node_id == user_array.value.length)
+            user_array.value.pop()
+      }
    }
    catch (e) {
       console.log(e);
@@ -169,9 +182,26 @@ async function add_value() {
    vis.value.render()
 }
 
-function delete_value(value) {
+async function delete_value(value) {
    if (step_promise.value) // prevent multiple entry
       return;
+   try {
+      let key= search_key.value;
+      let node_id= await rbhash.value.del(
+         hashfunc(key),
+         (j) => key.localeCompare(user_array.value[j-1]),
+         (state) => get_step_promise(state),
+      );
+      if (node_id > 0) {
+         user_array.value[node_id-1]= null
+         search_key.value= ''
+      }
+   }
+   catch (e) {
+      console.log(e)
+   }
+   step_promise.value= null
+   vis.value.render()
 }
 
 </script>

@@ -37,7 +37,7 @@ function calc_layout(rbhash, user_array, markup, canvas_rect) {
    let buckets= new Array(rbhash.n_buckets)
    let nodes= new Array(user_array.length+1)
    for (let node_id= 1; node_id <= user_array.length; node_id++)
-      nodes[node_id]= {
+      nodes[node_id]= user_array[node_id-1] == null? null : {
          id: node_id,
          key: user_array[node_id-1],
          highlight: highlight['node'+node_id]
@@ -63,7 +63,7 @@ function calc_layout(rbhash, user_array, markup, canvas_rect) {
    let widths= [];
    for (let b= 0; b < buckets.length; b++) {
       buckets[b]= { idx: b, highlight: highlight['bucket'+b] }
-      let node_id= rbhash.array[rbhash.table_ofs + b]
+      let node_id= rbhash.array[rbhash.table_ofs + b] >> 1
       if (node_id) {
          buckets[b].node_id= node_id
          let node= buckets[b].node= nodes[node_id]
@@ -151,11 +151,15 @@ function animate_layout(layout, goal) {
    // Remove nodes that no longer exist
    while (layout.nodes.length > goal.nodes.length)
       layout.nodes.pop()
-   // Same for buckets
+   for (let i= 1; i < layout.nodes.length; i++)
+      if (!goal.nodes[i])
+         layout.nodes[i]= null
+   // Adjust bucket array to match goal
    while (layout.buckets.length > goal.buckets.length)
       layout.buckets.pop()
    while (layout.buckets.length < goal.buckets.length)
       layout.buckets.push({ idx: layout.buckets.length, x: goal.canvas_rect.width, dx: 0 })
+
    layout.canvas_rect= goal.canvas_rect
    layout.node_rad= goal.node_rad
    layout.node_dx= goal.node_dx
@@ -278,7 +282,7 @@ function render_layout(layout, ctx) {
    // Now render links between nodes
    for (let i= 1; i < layout.nodes.length; i++) {
       let node= layout.nodes[i]
-      if (node.parent_id) {
+      if (node && node.parent_id) {
          // don't render unless it's within 50% of the distance it's supposed to be
          let parent= layout.nodes[node.parent_id];
          let parent_dx= node.x - parent.x;
@@ -292,7 +296,7 @@ function render_layout(layout, ctx) {
    // Now render the nodes, overtop the ends of the links
    for (let i= 1; i < layout.nodes.length; i++) {
       let node= layout.nodes[i]
-      if (node.key != null) {
+      if (node) {
          if (node.highlight || node.id == props.markup.selected_node) {
             ctx.lineWidth= 4
             ctx.strokeStyle= node.highlight == 2? '#BFB' : '#DD0'
@@ -363,7 +367,7 @@ function rerender() {
 // Render when canvas is first created, and every time props.rbhash changes
 onMounted(render)
 watch(() => props.rbhash, render)
-watch(props.markup, (m) => { m.insert_at? render() : rerender() })
+watch(props.markup, render)
 
 defineExpose({ render: render })
 const emit= defineEmits([ 'nodeClick' ])
@@ -378,7 +382,7 @@ function canvas_mousedown(ev) {
    // Did this click land on a node?
    for (let i=1; i < anim_layout.nodes.length; i++) {
       let node= anim_layout.nodes[i];
-      if (distance(node.x - x, node.y - y) <= anim_layout.node_rad) {
+      if (node && distance(node.x - x, node.y - y) <= anim_layout.node_rad) {
          drag_target= node.id
          // also emit an event
          emit('nodeClick', { node_id: node.id })

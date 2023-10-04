@@ -14,14 +14,11 @@ function noderef(i, right) {
 function noderef_is_red(i, right) {
    return props.rbhash.array[ i*2 + right ] & 1;
 }
-function rootref() {
-   return props.rbhash.array[ props.rbhash.root_ref_ofs ];
-}
 function n_buckets() {
    return props.rbhash.n_buckets;
 }
 function bucket(i) {
-   return props.rbhash.array[ props.rbhash.table_ofs + i ];
+   return props.rbhash.array[ props.rbhash.table_ofs + i ] >> 1;
 }
 
 </script>
@@ -30,7 +27,6 @@ function bucket(i) {
 <table>
 <caption>
    {{ rbhash.capacity }} + 1 nodes for user array &amp; Sentinel<br>
-   + 1 temporary root-ref<br>
    + {{ rbhash.array.length - rbhash.table_ofs }} hash buckets<br>
    = {{ rbhash.array.length * ( rbhash.capacity <= 0x7E? 1 : rbhash.capacity <= 0x7FFE? 2 : 4 ) }} bytes
 </caption>
@@ -63,18 +59,6 @@ function bucket(i) {
    <td :class="'user-el ' + (nodeused(i)? 'full' : 'empty') + (markup.selected_node == i? ' selected' : '') ">
       {{ nodeused(i)? '"' + user_array[i-1] + '"' : '-' }}
    </td>
-</tr>
-<tr>
-   <td :class=" 'node root-ref ' + (rootref()? 'full' : 'empty') ">
-      <div class="node-id"><span>tmp root</span></div>
-      <div class="noderefs">
-         <div :class="'noderef ' + (rootref()? 'black' : 'empty') ">
-            {{ rootref() }}
-         </div>
-         <div class="noderef" style="visibility:hidden">&nbsp;</div>
-      </div>
-   </td>
-   <td class="user-el blank">&nbsp;</td>
 </tr>
 <tr><th>Hash Table</th></tr>
 <tr v-for="i in parseInt((n_buckets() + 3)/4)">
