@@ -4,7 +4,7 @@ import { ref, watch, onMounted } from 'vue'
 const props= defineProps({
    rbhash: Object,
    user_array: Object,
-   selected_node: Number,
+   markup: Object,
    node_size: Number
 })
 
@@ -19,11 +19,11 @@ let final_layout;
 
   {
    nodes: [
-     { id: , width: , height: , x: , y: , 0: , 1: , red: , parent_id: }
+     { id: , width: , height: , x: , y: , 0: , 1: , red: , parent_id: , highlight: }
      ...
    ]
    buckets: [
-     { idx: , x: , dx: , node_id: }
+     { idx: , x: , dx: , node_id: , higghlight: }
    ],
    node_rad:
    node_dx:
@@ -32,11 +32,16 @@ let final_layout;
   }
 
 */
-function calc_layout(rbhash, user_array, canvas_rect) {
+function calc_layout(rbhash, user_array, markup, canvas_rect) {
+   let highlight= markup && markup.highlight? markup.highlight : {}
    let buckets= new Array(rbhash.n_buckets)
    let nodes= new Array(user_array.length+1)
    for (let node_id= 1; node_id <= user_array.length; node_id++)
-      nodes[node_id]= { id: node_id, key: user_array[node_id-1] }
+      nodes[node_id]= {
+         id: node_id,
+         key: user_array[node_id-1],
+         highlight: highlight['node'+node_id]
+      }
 
    let build_subtree_layout= (node) => {
       node.width= 1;
@@ -57,7 +62,7 @@ function calc_layout(rbhash, user_array, canvas_rect) {
    let width= 0;
    let widths= [];
    for (let b= 0; b < buckets.length; b++) {
-      buckets[b]= { idx: b }
+      buckets[b]= { idx: b, highlight: highlight['bucket'+b] }
       let node_id= rbhash.array[rbhash.table_ofs + b]
       if (node_id) {
          buckets[b].node_id= node_id
@@ -104,7 +109,7 @@ function calc_layout(rbhash, user_array, canvas_rect) {
       if (node[1]) calc_subtree_coordinates(node[1], node.x + node_dx/2, y + node_dy);
    }
    
-   // render each filled bucket, first rendering the empty buckets to the left.
+   // mark the boundaries of each bucket, and then position the tree within
    let x= 0
    for (let b= 0; b < buckets.length; b++) {
       let dx;
@@ -119,6 +124,18 @@ function calc_layout(rbhash, user_array, canvas_rect) {
       }
       buckets[b].dx= dx
       x += dx
+   }
+   // during insert, the hints include the location where the new node is being
+   // compared.  The new node is not in the tree yet, so set (x,y) relative to
+   // comparison target
+   if (markup && markup.insert_at) {
+      let ins_node= nodes[markup.insert_at[0]];
+      let target_node= nodes[markup.insert_at[1]];
+      if (!('x' in ins_node)) {
+         ins_node.x= target_node.x + node_dx * .8
+         ins_node.y= target_node.y - node_dx * .8
+         target_node.ins_relative= ins_node
+      }
    }
 
    return { nodes, buckets, canvas_rect, node_rad, node_dx, node_dy }
@@ -144,7 +161,7 @@ function animate_layout(layout, goal) {
    layout.node_dx= goal.node_dx
    layout.node_dy= goal.node_dy
 
-   let todo= false;
+   let pending_motion= false;
 
    // For each bucket
    let x= 0;
@@ -155,15 +172,19 @@ function animate_layout(layout, goal) {
       let add_missing_node= function(node_id) {
          while (layout.nodes.length <= node_id)
             layout.nodes.push(null);
-         return layout.nodes[node_id]= { id: node_id, x: bucket.x+bucket.dx/2, y: 0 }
+         return layout.nodes[node_id]= {
+            id: node_id, key: goal.nodes[node_id].key,
+            x: bucket.x+bucket.dx/2, y: 0
+         }
       }
       // subtree x,y are adjusted according to their offset from parent, so that
       // moving the parent moves the whole subtree at the same speed
       let adjust_subtrees= function(node, goal_node) {
          node.red= goal_node.red
+         node.highlight= goal_node.highlight
          if (node.x != goal_node.x || node.y != goal_node.y) {
             //console.log('node '+node.id+' change:', node, goal_node)
-            todo= true
+            pending_motion= true
          }
          for (let subtree= 0; subtree < 2; subtree++) {
             if (goal_node[subtree]) {
@@ -192,6 +213,16 @@ function animate_layout(layout, goal) {
                delete node[subtree];
             }
          }
+         if (goal_node.ins_relative) {
+            node.ins_relative= layout.nodes[goal_node.ins_relative.id] || add_missing_node(goal_node.ins_relative.id)
+            let child= node.ins_relative
+            child.x= slide(child.x, goal_node.ins_relative.x)
+            child.y= slide(child.y, goal_node.ins_relative.y)
+            node.ins_relative.highlight= 2
+            if (child.x != goal_node.ins_relative.x || child.y != goal_node.ins_relative.y)
+               pending_motion= true
+         }
+         else delete node.ins_relative
       }
       // stretch it toward its correct dx
       bucket.dx= slide(bucket.dx, goal_bucket.dx)
@@ -200,14 +231,14 @@ function animate_layout(layout, goal) {
       x += bucket.dx
       if (bucket.dx != goal_bucket.dx) {
          //console.log('bucket '+b+' change:', bucket, goal_bucket)
-         todo= true
+         pending_motion= true
       }
       // If tree rooted here, move its root node
       if (goal_bucket.node_id) {
          bucket.node_id= goal_bucket.node_id
          bucket.node= layout.nodes[bucket.node_id]
          if (!bucket.node)
-            bucket.node= add_missing_node(bucket.node_id)
+            bucket.node= add_missing_node(bucket.node_id, bucket)
          if (bucket.node_id != drag_target) {
             bucket.node.x= slide(bucket.node.x, goal_bucket.node.x)
             bucket.node.y= slide(bucket.node.y, goal_bucket.node.y)
@@ -219,8 +250,8 @@ function animate_layout(layout, goal) {
          delete bucket.node
       }
    }
-   // do coordiante differences remain?
-   return todo;
+   // do coordinate differences remain?
+   return pending_motion;
 }
 
 function render_layout(layout, ctx) {
@@ -261,17 +292,28 @@ function render_layout(layout, ctx) {
    // Now render the nodes, overtop the ends of the links
    for (let i= 1; i < layout.nodes.length; i++) {
       let node= layout.nodes[i]
-      ctx.lineWidth= i == props.selected_node? 2 : 1
-      ctx.strokeStyle= i == props.selected_node? 'green' : node.red? "red" : "black"
-      ctx.beginPath()
-      ctx.arc(node.x, node.y, layout.node_rad, 0, 2*Math.PI)
-      ctx.fillStyle= node.red? '#FDD' : '#EEE'
-      ctx.fill()
-      ctx.stroke()
-      ctx.fillStyle= i == props.selected_node? 'green' : node.red? 'red':'black'
-      ctx.textAlign = 'center'
-      ctx.textBaseline = 'middle'
-      ctx.fillText(node.id, node.x, node.y)
+      if (node.key != null) {
+         if (node.highlight || node.id == props.markup.selected_node) {
+            ctx.lineWidth= 4
+            ctx.strokeStyle= node.highlight == 2? '#BFB' : '#DD0'
+            ctx.beginPath()
+            ctx.arc(node.x, node.y, layout.node_rad+1, 0, 2*Math.PI)
+            ctx.stroke()
+         }
+         ctx.lineWidth= 1
+         ctx.strokeStyle= node.red? "red" : "black"
+         ctx.beginPath()
+         ctx.arc(node.x, node.y, layout.node_rad, 0, 2*Math.PI)
+         ctx.fillStyle= node.highlight == 1? (node.red? '#FD7' : '#EE0')
+            : node.highlight == 2? (node.red? '#DF7' : '#BFB')
+            : (node.red? '#FDD' : '#EEE')
+         ctx.fill()
+         ctx.stroke()
+         ctx.fillStyle= node.red? 'red':'black'
+         ctx.textAlign = 'center'
+         ctx.textBaseline = 'middle'
+         ctx.fillText(node.id, node.x, node.y)
+      }
    }
 }
 
@@ -291,15 +333,17 @@ function animate(enable) {
 }
 
 function render() {
+   console.log('render', !!canvas.value);
    if (!canvas.value) return
    let rect= canvas.value.getBoundingClientRect()
    let scale= window.devicePixelRatio || 1;
    canvas.value.width= rect.width * scale;
    canvas.value.height= rect.height * scale;
-   final_layout= calc_layout(props.rbhash, props.user_array, rect)
+   final_layout= calc_layout(props.rbhash, props.user_array, props.markup, rect)
    rerender()
 }
 function rerender() {
+   console.log('rerender', !!canvas.value, JSON.stringify(props.markup.insert_at), anim_layout.nodes);
    if (!canvas.value) return
    let scale= window.devicePixelRatio || 1;
    let ctx= canvas.value.getContext('2d')
@@ -311,8 +355,8 @@ function rerender() {
 
 // Render when canvas is first created, and every time props.rbhash changes
 onMounted(render)
-watch(() => props.rbhash, render)
-watch(() => props.selected_node, rerender)
+watch(props.rbhash, render)
+watch(props.markup, (m) => { m.insert_at? render() : rerender() })
 
 defineExpose({ render: render })
 const emit= defineEmits([ 'nodeClick' ])

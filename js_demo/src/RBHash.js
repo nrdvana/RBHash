@@ -17,7 +17,7 @@ export default class RBHash {
       let bucket_ofs= this.table_ofs + bucket;
       let state= {
          message: ["Hash code "+hash_code+" mod "+this.n_buckets+" = "+bucket],
-         highlight: { [bucket_ofs]: 'test' },
+         highlight: { [bucket_ofs]: 'read' },
          newnode_at: bucket_ofs
       };
       if (!rbhash[bucket_ofs]) {
@@ -35,7 +35,7 @@ export default class RBHash {
          state.message.push('Bucket is full...')
          do {
             state.message.push("Compare to node "+at_node);
-            state.newnode_at= at_node;
+            state.insert_at= [ node_id, at_node ];
             if (showstate) await showstate(state)
             if (!(cmp= cmp_fn(at_node))) {
                state.message.push("Found a duplicate, will not insert");
@@ -53,9 +53,7 @@ export default class RBHash {
          rbhash[pos_ref]= (node_id << 1) | 1;
          state.message.push('Insert '+node_id+' under '+(pos_ref>>1))
          state.message.push('Leaf nodes are Red')
-         state.highlight[pos_ref]= 'write';
-         state.newnode_at= null;
-         state.cur_node= pos_ref>>1;
+         state.highlight= { ['node'+(pos_ref>>1)]: 1, ['node'+node_id]: 2 }
          if (showstate) await showstate(state);
          
          while (path.length > 1) {
@@ -63,15 +61,17 @@ export default class RBHash {
             let pos= rbhash[pos_ref];
             let parent_ref= path[path.length-1];
             state.message.push('Balance at node '+(pos>>1));
+            state.highlight= { ['node'+(pos>>1)]: 2 }
             state.cur_node= pos_ref>>1;
             // if current is a black node, no rotations needed
             if (!(pos & 1)) {
-               state.message.push('Node is Black, no rotations needed.');
-               break;
+               state.message.push('Node is Black, no rotations needed.')
+               break
             }
             // pos is red, its new child is red, and parent will be black.
             // if the sibling is also red, we can pull down the color black from the parent
             // if not, need a rotation.
+            state.highlight['node'+(rbhash[pos_ref^1]>>1)]= 1
             if (!(rbhash[pos_ref^1] & 1)) {
                // Sibling is black, need a rotation.
                state.message.push('Node is Red with Black sibling. Need a rotation.')
@@ -81,9 +81,11 @@ export default class RBHash {
                // e.g. if pos_ref is leftward (even) and pos's rightward child (odd) is the red one...
                let child_ref= pos ^ (pos_ref&1);
                let child= rbhash[child_ref];
+               state.highlight['node'+(child>>1)]= 'read'
                if (child&1) {
                   state.message.push('Red Child is same side as Parent, so need to rotate away from Parent');
                   if (showstate) await showstate(state);
+
                   // rotate pos toward [side] so parent's [side] now points to pos's [otherside]
                   // set pos's child-ref to child's [otherside] ref
                   let near_grandchild_ref= child ^ (child_ref&1);
@@ -95,10 +97,13 @@ export default class RBHash {
                   // parent's [side] has not been updated here, but is about to become 'child'
                   child_ref= near_grandchild_ref^1;
                   child= rbhash[child_ref];
+
+                  state.highlight= { ['node'+(pos>>1)]:2, ['node'+(child>>1)]:1 }
                }
                // Now we can rotate toward parent to balance the tree.
                state.message.push("Rotate Red node up to Parent's position");
                if (showstate) await showstate(state);
+
                rbhash[pos_ref]= child;
                rbhash[child_ref]= pos_ref|1; // = parent, colored red.  simplification of ((pos_ref>>1)<<1)|1
                rbhash[parent_ref]= pos^1; // also make pos black
@@ -107,9 +112,7 @@ export default class RBHash {
             }
             state.message.push('Node is Red with Red sibling')
             state.message.push('Pull down Black color from parent')
-            state.highlight[pos_ref]= 'write';
-            state.highlight[pos_ref^1]= 'write';
-            state.highlight[parent_ref]= 'write';
+            state.highlight['node'+(pos_ref>>1)]= 2
             if (showstate) await showstate(state);
             
             rbhash[pos_ref] ^= 1;       // toggle color of pos
@@ -119,9 +122,10 @@ export default class RBHash {
             // Jump twice up the tree so that once again, pos has one red child.
             path.pop();
          }
-         state.message.push('Tree is balanced');
-         state.finished= true;
-         if (showstate) await showstate(state);
+         state.message.push('Tree is balanced')
+         state.highlight= {}
+         state.finished= true
+         if (showstate) await showstate(state)
          // store the temp root back into the bucket in case root of tree changed
          rbhash[bucket_ofs]= rbhash[ this.root_ref_ofs ] >> 1;
          rbhash[ this.root_ref_ofs ]= 0;

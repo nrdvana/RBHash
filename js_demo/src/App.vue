@@ -8,15 +8,14 @@ const show_description= ref(true)
 const hashtable_size_factor= ref(1.0)
 const hash_function= ref('sum')
 const enable_step= ref(false);
-const op_in_progress= ref(false);
 const search_key= ref();
 const vis= ref(null);
-
+const step_promise= ref(null);
 const messages= ref([]);
 
 const user_array= ref([])
 const rbhash= ref(recreate_rbhash(15))
-const selected_node= ref(null);
+const vis_markup= ref({})
 
 watch([ hashtable_size_factor, hash_function ], () => {
    rbhash.value= recreate_rbhash(rbhash.value.capacity)
@@ -75,34 +74,39 @@ function recreate_rbhash(new_capacity) {
    return new_rbh;
 }
 
-let step_promise;
 function step() {
-   if (step_promise) {
-      step_promise.resolve(true);
-      step_promise= null;
+   if (step_promise.value) {
+      step_promise.value.resolve(true);
+      step_promise.value= null;
       vis.value.render();
    }
 }
-function get_step_promise() {
-   if (step_promise == null) {
+function get_step_promise(state) {
+   console.log('get_step_promise', JSON.stringify(state), JSON.stringify(vis_markup.value), !!step_promise.value)
+   if (step_promise.value == null) {
       if (!enable_step.value)
          return null;
-      let res, rej;
-      step_promise= new Promise((resolve, reject) => { res= resolve; rej= reject; });
-      step_promise.resolve= res;
-      step_promise.reject= rej;
+      if (state.message)
+         messages.value= [].concat(state.message)
+      if (state.highlight)
+         vis_markup.value.highlight= state.highlight
+      if (state.insert_at)
+         vis_markup.value.insert_at= state.insert_at
+      if (!state.finished) {
+         let res, rej;
+         step_promise.value= new Promise((resolve, reject) => { res= resolve; rej= reject; });
+         step_promise.value.resolve= res;
+         step_promise.value.reject= rej;
+      }
    }
-   return step_promise;
+   console.log(JSON.stringify(vis_markup.value));
+   return step_promise.value;
 }
 
 function select_node(node_id) {
-   // Only change the selection if not stepping through an algorithm
-   if (op_in_progress.value)
-      return;
-   
    // Update magic variable to let visualizations show it
-   if (selected_node.value != node_id) {
-      selected_node.value= node_id
+   if (vis_markup.value.selected_node != node_id) {
+      vis_markup.value.selected_node= node_id
       if (node_id != null)
          // Update key blank with the value of this array element
          if (node_id > 0 && node_id <= user_array.value.length && search_key.value != user_array.value[node_id-1])
@@ -122,9 +126,8 @@ watch(search_key, () => {
 })
 
 async function add_value() {
-   if (step_promise || op_in_progress.value) // prevent multiple entry
+   if (step_promise.value) // prevent multiple entry
       return;
-   op_in_progress.value= true;
    try {
       let key= search_key.value;
       if (user_array.value.length >= rbhash.value.capacity)
@@ -135,7 +138,7 @@ async function add_value() {
          user_array.value.length,
          hashfunc(key),
          (j) => key.localeCompare(user_array.value[j-1]),
-         (state) => { messages.value= [].concat(state.message); return get_step_promise() }
+         (state) => get_step_promise(state),
       );
       if (ins_found == user_array.value.length)
          search_key.value= ''
@@ -145,12 +148,12 @@ async function add_value() {
    catch (e) {
       console.log(e);
    }
-   op_in_progress.value= false;
-   vis.value.render();
+   step_promise.value= null
+   vis.value.render()
 }
 
 function delete_value(value) {
-   if (step_promise || op_in_progress.value) // prevent multiple entry
+   if (step_promise.value) // prevent multiple entry
       return;
 }
 
@@ -195,20 +198,20 @@ function delete_value(value) {
                   v-model="hashtable_size_factor" @keyup.enter="rbhash= recreate_rbhash(rbhash.capacity)">
             </label>
          </div>
-         <RBHashArrayView :rbhash=rbhash :user_array=user_array :selected_node=selected_node />
+         <RBHashArrayView :rbhash=rbhash :user_array=user_array :markup=vis_markup />
       </div>
       <div style="flex-grow: 1">
-         <div>
-            <label>Key: <input name="value" :disabled="op_in_progress" v-model="search_key" @keyup.enter="add_value()" /></label>
-            <button type="button" :disabled="op_in_progress" @click="add_value()">Add</button>
-            <button type="button" :disabled="op_in_progress" @click="delete_value()">Delete</button>
+         <div class="ops">
+            <label>Key: <input name="value" :disabled="step_promise" v-model="search_key" @keyup.enter="add_value()" /></label>
+            <button type="button" :disabled="step_promise" @click="add_value()">Add</button>
+            <button type="button" :disabled="step_promise" @click="delete_value()">Delete</button>
             <br>
-            <label>Step-by-Step <input type="checkbox" v-model="enable_step"></label>
-            <button type="button" @click="step()" :disabled="!enable_step">Step</button>
+            <label>Step Through Algorithm <input type="checkbox" v-model="enable_step"></label>
+            <button type="button" @click="step()" :style="'visibility:'+(step_promise? 'visible':'hidden')">Step</button>
          </div>
          <div style="border: 1px solid black">
-            <RBHashVisualizer ref="vis" :rbhash=rbhash :user_array=user_array
-               :selected_node=selected_node @node-click="(e) => select_node(e.node_id)"
+            <RBHashVisualizer ref="vis" :rbhash=rbhash :user_array=user_array :markup=vis_markup
+               @node-click="(e) => select_node(e.node_id)"
             />
          </div>
          <div>
@@ -219,6 +222,9 @@ function delete_value(value) {
 </template>
 
 <style scoped>
+h3 { margin: 8px; padding: 0px; }
+.description { margin: 4px; box-shadow: 1px 2px 3px; padding: 8px; }
+.description p { margin-top: 0; }
 .description.collapse { display: none; }
 .app {
    min-width: 800px;
@@ -241,6 +247,7 @@ function delete_value(value) {
 .control {
    display: flex; gap: 8px;
 }
+.ops button { margin: 0 0 0 .5em; }
 .main {
    display: flex; gap: 16px;
 }
