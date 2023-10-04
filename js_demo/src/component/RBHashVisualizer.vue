@@ -4,6 +4,7 @@ import { ref, watch, onMounted } from 'vue'
 const props= defineProps({
    rbhash: Object,
    user_array: Object,
+   selected_node: Number,
    node_size: Number
 })
 
@@ -84,7 +85,7 @@ function calc_layout(rbhash, user_array, canvas_rect) {
    } else {
       // for each small node, can we make all buckets at least this large without running out of room?
       while (widths.length && (widest_sum - widths[0]) + (widths[0] * standard_bucket_count) <= canvas_rect.width/node_dx) {
-         console.log(widest_sum, widths.concat([]), standard_bucket_count)
+         //console.log(widest_sum, widths.concat([]), standard_bucket_count)
          // convert least-wide to a standard bucket width
          widest_sum -= widths[0]
          widths.shift();
@@ -92,7 +93,7 @@ function calc_layout(rbhash, user_array, canvas_rect) {
       }
       // divide remaiing space among the standard buckets
       standard_bucket_dx= (canvas_rect.width - widest_sum*node_dx) / standard_bucket_count;
-      console.log(widest_sum, widths.concat([]), standard_bucket_count, canvas_rect.width, standard_bucket_dx)
+      //console.log(widest_sum, widths.concat([]), standard_bucket_count, canvas_rect.width, standard_bucket_dx)
    }
    
    // Now that bucket widths are known, give everything an X and Y coordinate
@@ -160,8 +161,10 @@ function animate_layout(layout, goal) {
       // moving the parent moves the whole subtree at the same speed
       let adjust_subtrees= function(node, goal_node) {
          node.red= goal_node.red
-         if (node.x != goal_node.x || node.y != goal_node.y)
+         if (node.x != goal_node.x || node.y != goal_node.y) {
+            //console.log('node '+node.id+' change:', node, goal_node)
             todo= true
+         }
          for (let subtree= 0; subtree < 2; subtree++) {
             if (goal_node[subtree]) {
                node[subtree]= layout.nodes[goal_node[subtree].id];
@@ -195,8 +198,10 @@ function animate_layout(layout, goal) {
       // but stack them from the left regardless of where they are
       bucket.x= x
       x += bucket.dx
-      if (bucket.x != goal_bucket.x || bucket.dx != goal_bucket.dx)
+      if (bucket.dx != goal_bucket.dx) {
+         //console.log('bucket '+b+' change:', bucket, goal_bucket)
          todo= true
+      }
       // If tree rooted here, move its root node
       if (goal_bucket.node_id) {
          bucket.node_id= goal_bucket.node_id
@@ -256,14 +261,14 @@ function render_layout(layout, ctx) {
    // Now render the nodes, overtop the ends of the links
    for (let i= 1; i < layout.nodes.length; i++) {
       let node= layout.nodes[i]
-      ctx.lineWidth= 1
-      ctx.strokeStyle= node.red? "red" : "black"
+      ctx.lineWidth= i == props.selected_node? 2 : 1
+      ctx.strokeStyle= i == props.selected_node? 'green' : node.red? "red" : "black"
       ctx.beginPath()
       ctx.arc(node.x, node.y, layout.node_rad, 0, 2*Math.PI)
       ctx.fillStyle= node.red? '#FDD' : '#EEE'
       ctx.fill()
       ctx.stroke()
-      ctx.fillStyle= node.red? 'red':'black'
+      ctx.fillStyle= i == props.selected_node? 'green' : node.red? 'red':'black'
       ctx.textAlign = 'center'
       ctx.textBaseline = 'middle'
       ctx.fillText(node.id, node.x, node.y)
@@ -272,12 +277,16 @@ function render_layout(layout, ctx) {
 
 function animate(enable) {
    if (enable) {
-      if (!animation_timer_id)
+      if (!animation_timer_id) {
          animation_timer_id= setInterval(rerender, 1000/60);
+         //console.log('animate=true')
+      }
    } else {
-      if (animation_timer_id)
+      if (animation_timer_id) {
          clearInterval(animation_timer_id)
          animation_timer_id= null;
+         //console.log('animate=false')
+      }
    }
 }
 
@@ -303,10 +312,10 @@ function rerender() {
 // Render when canvas is first created, and every time props.rbhash changes
 onMounted(render)
 watch(() => props.rbhash, render)
+watch(() => props.selected_node, rerender)
 
-defineExpose({
-   render: render
-})
+defineExpose({ render: render })
+const emit= defineEmits([ 'nodeClick' ])
 
 function distance(dx, dy) {
    return Math.sqrt(dx*dx + dy*dy)
@@ -320,6 +329,8 @@ function canvas_mousedown(ev) {
       let node= anim_layout.nodes[i];
       if (distance(node.x - x, node.y - y) <= anim_layout.node_rad) {
          drag_target= node.id
+         // also emit an event
+         emit('nodeClick', { node_id: node.id })
          break
       }
    }
@@ -333,6 +344,7 @@ function canvas_mouseup(ev) {
          node.x_ofs= node.x - parent.x
          node.y_ofs= node.y - parent.y
       }
+      animate(true)
    }
    drag_target= 0
 }
@@ -343,6 +355,7 @@ function canvas_mousemove(ev) {
    if (drag_target && drag_target < anim_layout.nodes.length) {
       anim_layout.nodes[drag_target].x= x;
       anim_layout.nodes[drag_target].y= y;
+      animate(true)
    }
 }
 

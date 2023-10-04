@@ -1,6 +1,7 @@
 <script setup>
 const props= defineProps({
    rbhash: Object,
+   selected_node: Number,
    user_array: Object,
 })
 
@@ -48,7 +49,7 @@ function bucket(i) {
    <td class="user-el"></td>
 </tr>
 <tr v-for="i in rbhash.capacity">
-   <td :class="'node ' + (nodeused(i)? 'full' : 'empty') ">
+   <td :class="'node ' + (nodeused(i)? 'full' : 'empty') + (selected_node == i? ' selected' : '') ">
       <div class="node-id">{{ i }}</div>
       <div class="noderefs">
          <div :class="'noderef ' + (!nodeused(i)? 'empty' : !noderef(i,0)? '' : noderef_is_red(i, 0)? 'red' : 'black') ">
@@ -59,7 +60,7 @@ function bucket(i) {
          </div>
       </div>
    </td>
-   <td :class="'user-el ' + (nodeused(i)? 'full' : 'empty') ">
+   <td :class="'user-el ' + (nodeused(i)? 'full' : 'empty') + (selected_node == i? ' selected' : '') ">
       {{ nodeused(i)? '"' + user_array[i-1] + '"' : '-' }}
    </td>
 </tr>
@@ -97,9 +98,18 @@ th:first-child { text-align: right; padding-right: 20px; }
 td:first-child { padding: 0 20px 0 0; }
 td.blank { visibility: hidden; }
 .user-el { width: auto; padding: 4px; }
+.user-el.selected {
+   color: green;
+   background-image: linear-gradient(to left, #FFF, #DFD);
+}
 .node, .bucket {
    min-width: 6em;
    display: flex; justify-content: flex-end; gap: 8px;
+}
+.node.selected {
+   color: green;
+   font-weight: bold;
+   background-image: linear-gradient(to right, #FFF, #DFD);
 }
 .node-id {
    font-family: monospace, sans-serif;

@@ -9,13 +9,14 @@ const hashtable_size_factor= ref(1.0)
 const hash_function= ref('sum')
 const enable_step= ref(false);
 const op_in_progress= ref(false);
-const next_key= ref();
+const search_key= ref();
 const vis= ref(null);
 
 const messages= ref([]);
 
 const user_array= ref([])
 const rbhash= ref(recreate_rbhash(15))
+const selected_node= ref(null);
 
 watch([ hashtable_size_factor, hash_function ], () => {
    rbhash.value= recreate_rbhash(rbhash.value.capacity)
@@ -94,24 +95,50 @@ function get_step_promise() {
    return step_promise;
 }
 
+function select_node(node_id) {
+   // Only change the selection if not stepping through an algorithm
+   if (op_in_progress.value)
+      return;
+   
+   // Update magic variable to let visualizations show it
+   if (selected_node.value != node_id) {
+      selected_node.value= node_id
+      if (node_id != null)
+         // Update key blank with the value of this array element
+         if (node_id > 0 && node_id <= user_array.value.length && search_key.value != user_array.value[node_id-1])
+            search_key.value= user_array.value[node_id-1]
+   }
+}
+
+// every time search_key changes, look for that element in the array
+watch(search_key, () => {
+   // would use rbtree algorithm, except the tree might be mid-change and not valid
+   for (let i=0; i < user_array.value.length; i++)
+      if (user_array.value[i] == search_key.value) {
+         select_node(i+1)
+         return
+      }
+   select_node(null)
+})
+
 async function add_value() {
-   if (step_promise) // prevent multiple entry
+   if (step_promise || op_in_progress.value) // prevent multiple entry
       return;
    op_in_progress.value= true;
    try {
-      let value= next_key.value;
+      let key= search_key.value;
       if (user_array.value.length >= rbhash.value.capacity)
          rbhash.value= recreate_rbhash(rbhash.value.capacity? rbhash.value.capacity*2 : 16);
       // insert into user array first so that rendering mid-algorithm doesn't fail
-      user_array.value.push(value);
+      user_array.value.push(key);
       let ins_found= await rbhash.value.insert(
          user_array.value.length,
-         hashfunc(value),
-         (j) => value.localeCompare(user_array.value[j-1]),
+         hashfunc(key),
+         (j) => key.localeCompare(user_array.value[j-1]),
          (state) => { messages.value= [].concat(state.message); return get_step_promise() }
       );
       if (ins_found == user_array.value.length)
-         next_key.value= ''
+         search_key.value= ''
       else // remove the item from the array if the insert didn't succeed
          user_array.value.pop();
    }
@@ -123,6 +150,8 @@ async function add_value() {
 }
 
 function delete_value(value) {
+   if (step_promise || op_in_progress.value) // prevent multiple entry
+      return;
 }
 
 </script>
@@ -166,11 +195,11 @@ function delete_value(value) {
                   v-model="hashtable_size_factor" @keyup.enter="rbhash= recreate_rbhash(rbhash.capacity)">
             </label>
          </div>
-         <RBHashArrayView :rbhash=rbhash :user_array=user_array />
+         <RBHashArrayView :rbhash=rbhash :user_array=user_array :selected_node=selected_node />
       </div>
       <div style="flex-grow: 1">
          <div>
-            <label>Key: <input name="value" :disabled="op_in_progress" v-model="next_key" @keyup.enter="add_value()" /></label>
+            <label>Key: <input name="value" :disabled="op_in_progress" v-model="search_key" @keyup.enter="add_value()" /></label>
             <button type="button" :disabled="op_in_progress" @click="add_value()">Add</button>
             <button type="button" :disabled="op_in_progress" @click="delete_value()">Delete</button>
             <br>
@@ -178,7 +207,9 @@ function delete_value(value) {
             <button type="button" @click="step()" :disabled="!enable_step">Step</button>
          </div>
          <div style="border: 1px solid black">
-            <RBHashVisualizer ref="vis" :rbhash=rbhash :user_array=user_array />
+            <RBHashVisualizer ref="vis" :rbhash=rbhash :user_array=user_array
+               :selected_node=selected_node @node-click="(e) => select_node(e.node_id)"
+            />
          </div>
          <div>
             <div v-for="line in messages">{{ line }}</div>
