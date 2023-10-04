@@ -310,9 +310,16 @@ function render_layout(layout, ctx) {
          ctx.fill()
          ctx.stroke()
          ctx.fillStyle= node.red? 'red':'black'
-         ctx.textAlign = 'center'
-         ctx.textBaseline = 'middle'
+         ctx.textAlign= 'center'
+         ctx.textBaseline= 'middle'
          ctx.fillText(node.id, node.x, node.y)
+         // render the key, downward
+         ctx.save()
+         ctx.translate(node.x, node.y+layout.node_rad+3)
+         ctx.rotate(Math.PI/2)
+         ctx.textAlign= 'left'
+         ctx.fillText(node.key, 0,0);
+         ctx.restore()
       }
    }
 }

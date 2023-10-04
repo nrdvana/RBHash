@@ -92,7 +92,7 @@ function step() {
    if (step_promise.value) {
       step_promise.value.resolve(true);
       step_promise.value= null;
-      vis.value.render();
+      //vis.value.render();
    }
 }
 function get_step_promise(state) {
@@ -211,10 +211,14 @@ function delete_value(value) {
                <option value="zero">The Number Zero</option>
                </select>
             </label>
-            <label>RBHash
-               Capacity <input class="rbparam" type="text" pattern="[0-9]+" v-model="rbhash_capacity" @keyup.enter="_build_rbhash()">
-               Buckets  <input class="rbparam" type="text" pattern="[0-9]+" v-model="rbhash_buckets"  @keyup.enter="_build_rbhash()">
-            </label>
+            <div>
+               <label>Capacity
+                  <input class="rbparam" type="text" pattern="[0-9]+" v-model="rbhash_capacity" @keyup.enter="_build_rbhash()">
+               </label>
+               <label>Buckets
+                  <input class="rbparam" type="text" pattern="[0-9]+" v-model="rbhash_buckets"  @keyup.enter="_build_rbhash()">
+               </label>
+            </div>
          </div>
          <RBHashArrayView :rbhash=rbhash :user_array=user_array :markup=vis_markup />
       </div>
@@ -262,7 +266,7 @@ h3 { margin: 8px; padding: 0px; }
    display: flex;
    flex-direction: column;
 }
-.config .rbparam { width: 3em; text-align: center; }
+.config .rbparam { width: 3em; text-align: center; margin-right: .5em; }
 .control {
    display: flex; gap: 8px;
 }
