@@ -1,3 +1,7 @@
+<!--
+RBHash visualizer Vue3 component
+Copyright 2023, Michael Conrad
+-->
 <script setup>
 import { ref, watch, onMounted } from 'vue'
 

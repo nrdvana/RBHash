@@ -1,3 +1,7 @@
+<!--
+RBHash demonstration Vue3 application
+Copyright 2023, Michael Conrad
+-->
 <script setup>
 import { ref, triggerRef, watch } from 'vue'
 import RBHashArrayView from './component/RBHashArrayView.vue'

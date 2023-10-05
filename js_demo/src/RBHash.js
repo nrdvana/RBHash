@@ -1,3 +1,6 @@
+/* RBHash class, derived from rbhash.c in this same repository.
+ * Copyright 2023, Michael Conrad
+ */
 export default class RBHash {
    constructor(capacity, n_buckets) {
       this.capacity= capacity;
