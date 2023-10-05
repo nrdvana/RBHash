@@ -85,7 +85,7 @@ function hashfunc(str) {
       return hash;
    }
    if (hash_function.value == 'firstlast') {
-      return (str.codePointAt(0) << 8) ^ str.codePointAt(str.length-1);
+      return str.codePointAt(0) * str.codePointAt(str.length-1);
    }
    return 0;
 }
@@ -207,26 +207,43 @@ async function delete_value(value) {
 </script>
 
 <template>
-   <h3>Red/Black HashTable Demonstration</h3>
+   <h3>Red/Black Hash Table "RBHash" Demonstration</h3>
    <div :class="'description' + (show_description? '' : ' collapse')">
-      <p>This is a hash table where each bucket collision is a Red/Black Tree, where the Red/Black
-      nodes are reduced to a pair of small integers, and nodes are pre-allocated up to
-      the "capacity" of the hash table.  (capacity meaning the maximum number of user
-      data elements before you decide to re-allocate the hash table)
+      <p>This is a hash table where each bucket collision is a Red/Black Tree, where the
+      Red/Black nodes are reduced to a pair of small integers, and nodes are pre-allocated up
+      to a "capacity", which is the maximum number of user data elements before re-allocating
+      and rebuilding the structure.
       Whenever the hash table gets rebuilt, the trees get reconstructed as new collisions
-      are found.  While there must be one node for each potential data element, the size of the
-      hashtable and quality of the hash function are arbitrary, since even a bad hash function
-      and tiny hash table have worst case performance of <code>N(log N)</code>.
+      are found.  While there must be one node for each potential data element, the number of
+      buckets in the hash table and quality of the hash function are arbitrary, since even a
+      bad hash function and tiny hash table have worst case performance of <code>N(log N)</code>.
       </p>
       <p>The Red/Black nodes can be allocated in the same block of memory as the hash
       table, or even the same block of memory as the array holding the user data elements.
-      For capacity of 126 or less, the nodes use 2 bytes each.  For capacity of 0x7FFE (32K)
-      or less, the nodes use 4 bytes each.  For capacity of 0x7FFFFFFE (2G) or less, the nodes
-      use 8 bytes each, and so on.  It seems unlikely that anyone would want to allocate
-      space for more than that in a single slab of memory, so this algorithm seems primarily
-      useful for arrays smaller than 32K elements.  It's also primarily useful for low-level
-      languages where you can actually allocte a contiguous array of small integers; this
-      JavaScript implementation is only for demonstration purposes.
+      For capacity of 127 or less, the nodes use 2 bytes each; for capacity 0x7FFF or less, the
+      nodes use 4 bytes each, and so on.  Beyond 32K elements, the memory savings of the
+      structure are likely outweighed by the cost of having to rebuild such a large structure as
+      it grows, and you should probably look for other algorithms like Hash-Tries or B-Trees.
+      However, if you know the upper bound of your capacity and don't mind allocating that
+      up-front, a filled-to-capacity RBHash will still consume less memory than most other
+      algorithms that build trees or tries from small allocations.
+      </p>
+      <p>The compelling features of this structure vs. other contemporary hash tables are that
+      it is not vulnerable to collision attacks (intentional or accidental), and supports
+      efficient deletion, while using comparable amounts of memory and reconstruction patterns.
+      It also allows you to preserve original insertion order, though this depends on how you
+      implement deletions in the "user array" (which need not strictly be an array).
+      It also doubles as a Red/Black Tree library by setting <code>buckets = 1</code>.
+      </p>
+      <p>The design of this demo is heavily inspired by
+      <a href="http://gauss.ececs.uc.edu/RedBlack/redblack.html">Dr. John Franco's Red/Black Java Applet</a>
+      (which no longer runs in browsers, sadly) and is based roughly on the same Red/Black
+      algorithm, as described in
+      <i>Berman and Paul. Sequential and Parallel Algorithms. 1997 (ISBN:0-534-94674-7)</i>
+      although it underwent some fairly drastic changes when I converted it to use an array of
+      integers.
+      This is also my second experiment using <a href="https://vuejs.org/">Vue 3</a>, and turned
+      out pretty well, though you probably shouldn't use this as example Vue code to learn from.
       </p>
       <button @click="show_description=false">Close</button>
    </div>
@@ -248,6 +265,10 @@ async function delete_value(value) {
                <label>Buckets
                   <input class="rbparam" type="text" pattern="[0-9]+" v-model="rbhash_buckets"  @keyup.enter="_build_rbhash()">
                </label>
+               <button :style="'visibility:'+(rbhash_capacity != rbhash.capacity || rbhash_buckets != rbhash.n_buckets? 'visible':'hidden')"
+                  @click="_build_rbhash()">
+                  Apply
+               </button>
             </div>
          </div>
          <RBHashArrayView :rbhash=rbhash :user_array=user_array :markup=vis_markup />
