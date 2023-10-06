@@ -1,131 +1,121 @@
-## my $namespace = 'rbhash';
-## my $min_bits  = 8;
-## my $max_bits  = 8;
-## my @default_compare_args= ('void *userdata', 'int (*cmp_cb)(void *, size_t)');
-## my $default_compare_fn = sub($node_id){ "cmp_cb(userdata, $node_id)" };
-## my @treeprint_args;
-## my $debug= 0;
+## param $namespace = 'rbhash';
+## param $min_bits  = 8;
+## param $max_bits  = 8;
+## param @default_compare_args= ('int (*cmp_cb)(void *, size_t)', 'void *userdata');
+## param $default_compare_fn = sub($node_id){ "cmp_cb(userdata, $node_id)" };
+## param @treeprint_args;
+## param $debug= 0;
+## param $feature_print= 1;
+## param $feature_demo= 0;
 
 ## my $NAMESPACE= uc($namespace);
-
 ## my @bits= map +(1<<$_), (log($min_bits)/log(2)) .. (log($max_bits)/log(2));
+## sub log2($x) { log($x)/log(2) }
+## sub word_type($bits) { 'uint'.$bits.'_t' }
 
-##sub word_type($bits) { 'uint'.$bits.'_t' }
+## section PUBLIC;
+
+#include <stdint.h>
+#include <stdlib.h>
+#include <stdbool.h>
+#include <assert.h>
 
 /* MAX_TREE_HEIGHT is the maximum number of nodes from root to leaf in any
- * correctly balanced tree.
+ * correctly balanced tree.  The exact formula for the maximum height (including
+ * root node) is floor(2*log2(N/2+1)) for a tree of N nodes.
  */
-## #scope PUBLIC;
 ## for my $bits (@bits) {
-#define ${NAMESPACE}_MAX_TREE_HEIGHT_$bits  ${{2*($bits-1)+1}}
-#define ${NAMESPACE}_MAX_ELEMENTS_$bits     0x${{sprintf "%X", 2**($bits-1)-2}}
+#define ${NAMESPACE}_MAX_ELEMENTS_$bits     0x${{ sprintf "%X", (1<<($bits-1))-1 }}
+#define ${NAMESPACE}_MAX_TREE_HEIGHT_$bits  ${{ int(2*log2((2**($bits-1)-1)/2+1)) }}
 ## }
 
-/* This macro selects the number of hash buckets to allocate, given the max
- * number of elements.  This can be increased for better hashing,
- * or decreased for memory savings.
+/* This macro tells you the word offset (treating rbhash as an array of words)
+ * of the first hash bucket.
  */
-#ifndef ${NAMESPACE}_TABLE_BUCKETS
-#define ${NAMESPACE}_TABLE_BUCKETS(capacity) (capacity)
-#endif
-/* This macro tells you the array index (starting from rbtable)
- * of the hash bucket for 'hash_code'.
- */
-#define ${NAMESPACE}_TABLE_WORD_OFS(capacity) ( (capacity)*2 + 3 )
-#define ${NAMESPACE}_TABLE_WORD_IDX(capacity, hash_code) \
-         ((hash_code) % ${NAMESPACE}_TABLE_BUCKETS(capacity))
-/* This macro tells you the array index (starting from rbtable)
- * of the slot used as the "parent pointer" for the root of the tree.
- * There are many trees, so this slot is used temporarily by each
- * algorithm that needs a root pointer.
- */
-#define ${NAMESPACE}_TREE_TMPROOT_IDX(capacity) ( (capacity)*2+2 )
+#define ${NAMESPACE}_TABLE_WORD_OFS(capacity) ( (capacity)*2 + 2 )
 
 /* This macro selects the word size needed to index 'capacity' number of
  * user elements.
  */
 #define ${NAMESPACE}_SIZEOF_WORD(capacity) ( \
-## for my $bits (reverse @bits) {
-##   if ($bits > $min_bits) {
-           (capacity) > ${NAMESPACE}_MAX_ELEMENTS_${{$bits/2}}? ${{$bits/8}} : \
+## for my $bits (@bits) {
+##   if ($bits < $max_bits) {
+           (capacity) <= ${NAMESPACE}_MAX_ELEMENTS_$bits? ${{ $bits/8 }} : \
 ##   } else {
            ${{ $bits/8 }} \
 ##   }
 ## }
         )
 
-/* This macro defines the total size (in bytes) of the rbhash array
- * for a given number of allocated elements.  This does not include the
- * elements, since those are whatever size the user wants them to be.
+/* This macro defines the total size (in bytes) of the rbhash storage
+ * for a given number of elements and buckets.  This does not include
+ * the user's elements themselves, since those are whatever size the
+ * user wants them to be, and rbhash doesn't need to know.
  */
-#define ${NAMESPACE}_SIZEOF(capacity) ( \
-           ${NAMESPACE}_SIZEOF_WORD(capacity) * ( \
-             (capacity)*2 + 3 \
-             + ${NAMESPACE}_TABLE_BUCKETS(capacity) \
-           ) \
+#define ${NAMESPACE}_SIZEOF(capacity, buckets) ( \
+           ${NAMESPACE}_SIZEOF_WORD(capacity) \
+           * ( ${NAMESPACE}_TABLE_WORD_OFS(capacity) + buckets ) \
         )
 
-/* This macro defines the maximum required size of a tree_path structure
- * for a given capacity, in bytes.  Note that these bytes need aligned to
- * at least the alignment of a pointer.
+/* Several functions can operate on a "path", which is a list of
+ * references starting at the bucket and ending at a tree node.
+ * The path is allocated to the maximum depth that a tree of that
+ * word-bits-size could reach.  Since this drastically affects the
+ * amount of stack used, a struct is declared for each word-bit size.
+ *
+ * The structs each record their length so that they can be passed
+ * interchangably to the functions.  You could even allocate custom
+ * lengths with alloca, but that seems overcomplicated.
  */
-#define ${NAMESPACE}_SIZEOF_PATH(capacity) ( \
-           sizeof(struct ${namespace}_tree_path) \
-           + ${NAMESPACE}_SIZEOF_WORD(capacity) * 16 \
-        )
-#define ${NAMESPACE}_DECLARE_STACK_PATH(varname, capacity) \
-   struct ${namespace}_tree_path *varname= \
-     (struct ${namespace}_tree_path *) alloca( \
-         ${NAMESPACE}_SIZEOF_PATH(capacity) \
-     );
-#define ${NAMESPACE}_INIT_STACK_PATH(path, size) \
-   do { \
-      (path)->len= 0; \
-      (path)->lim= ((size) - (sizeof(struct ${namespace}_tree_path)) / ${NAMESPACE}_SIZEOF_WORD(capacity)); \
-      (path)->u$min_bits.bucket= 0; \
-   } while(0)
-
-//include "rbhash.h"
-#include <stdint.h>
-#include <stdlib.h>
-#include <stdbool.h>
-#include <assert.h>
-
-struct ${namespace}_tree_path {
-   int len, lim;
-   union {
 ## for my $bits (@bits) {
-##   my $word_t= word_type($bits);
-      struct {
-         $word_t *bucket;
-         $word_t refs[];
-      } u$bits;
-## }
-   };
+struct ${namespace}_path_${bits} {
+   uint8_t len, lim;
+   size_t refs[${NAMESPACE}_MAX_TREE_HEIGHT_${bits}];
 };
+inline ${namespace}_path_${bits}_init(struct ${namespace}_path_${bits} *p) {
+   p->len= 0;
+   p->lim= ${NAMESPACE}_MAX_TREE_HEIGHT_${bits};
+}
+
+## }
+// Different template output may end up with different structs claiming
+// the name of ${namespace}_path, but that should be OK.
+typedef struct ${namespace}_path_${max_bits} ${namespace}_path;
+#define ${namespace}_init_path(p) ${namespace}_path_${max_bits}_init(p)
+
+extern size_t ${namespace}_find(void *rbhash, size_t capacity, size_t bucket_idx, @default_compare_args);
+extern size_t ${namespace}_insert(void *rbhash, size_t capacity, size_t node_id, size_t bucket_idx, @default_compare_args);
+extern size_t ${namespace}_delete(void *rbhash, size_t capacity, size_t bucket_idx, @default_compare_args);
+
+extern size_t ${namespace}_find_path(void *rbhash, size_t capacity, ${namespace}_path *path, size_t bucket_idx, @default_compare_args);
+extern size_t ${namespace}_path_step(void *rbhash, size_t capacity, ${namespace}_path *path, int ofs);
+
+
 ## for my $bits (@bits) {
 ##   my $word_t= word_type($bits);
-extern size_t ${namespace}_tree_insert_$bits($word_t *rbhash, size_t capacity, struct ${namespace}_tree_path *path, size_t node);
-extern size_t ${namespace}_tree_delete_$bits($word_t *rbhash, size_t capacity, struct ${namespace}_tree_path *path);
+extern size_t ${namespace}_insert_path_$bits($word_t *rbhash, ${namespace}_path *path, size_t node);
+extern size_t ${namespace}_delete_path_$bits($word_t *rbhash, ${namespace}_path *path);
 ## }
 
-extern size_t ${namespace}_tree_insert(void *rbhash, size_t capacity, struct ${namespace}_tree_path *path, size_t node) {
-##   for my $bits (@bits) {
-##     my $word_t= word_type($bits);
+inline size_t ${namespace}_insert_path(void *rbhash, size_t capacity, ${namespace}_path *path, size_t node) {
+## for my $bits (@bits) {
+##   my $word_t= word_type($bits);
    if (capacity <= ${NAMESPACE}_MAX_ELEMENTS_$bits)
-      ${namespace}_tree_insert_$bits(($word_t*) rbhash, capacity, path, node);
-##   }
+      ${namespace}_tree_insert_$bits(($word_t*) rbhash, path, node);
+## }
    return 0;
 }
 
-extern size_t ${namespace}_tree_delete(void *rbhash, size_t capacity, struct ${namespace}_tree_path *path) {
-##   for my $bits (@bits) {
-##     my $word_t= word_type($bits);
+inline size_t ${namespace}_delete_path(void *rbhash, size_t capacity, ${namespace}_path *path) {
+## for my $bits (@bits) {
+##   my $word_t= word_type($bits);
    if (capacity <= ${NAMESPACE}_MAX_ELEMENTS_$bits)
-      ${namespace}_tree_delete_$bits(($word_t*) rbhash, capacity, path);
-##   }
+      ${namespace}_tree_delete_$bits(($word_t*) rbhash, path);
+## }
    return 0;
 }
+
+## section PRIVATE;
 
 /* Find a node in the hash table, or tree.  Returns the node_id, or 0 if no
  * nodes match.
