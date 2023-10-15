@@ -275,7 +275,9 @@ async function delete_value(value) {
                </button>
             </div>
          </div>
-         <RBHashArrayView :rbhash=rbhash :user_array=user_array :markup=vis_markup />
+         <RBHashArrayView :rbhash=rbhash :user_array=user_array :markup=vis_markup
+            @node-click="(e) => select_node(e.node_id)"
+         />
       </div>
       <div style="flex-grow: 1">
          <div class="ops">

@@ -25,6 +25,8 @@ function bucket(i) {
    return props.rbhash.array[ props.rbhash.table_ofs + i ] >> 1;
 }
 
+const emit= defineEmits([ 'nodeClick' ])
+
 </script>
 
 <template>
@@ -48,7 +50,7 @@ function bucket(i) {
       </td>
       <td class="user-el"></td>
    </tr>
-   <tr v-for="i in rbhash.capacity">
+   <tr v-for="i in rbhash.capacity" :class="(markup.selected_node == i? 'selected' : '')" @click="emit('nodeClick', { node_id: i })">
       <td :class="'node ' + (nodeused(i)? 'full' : 'empty') + (markup.selected_node == i? ' selected' : '') ">
          <div class="node-id">{{ i }}</div>
          <div class="noderefs">
