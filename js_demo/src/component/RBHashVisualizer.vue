@@ -287,12 +287,15 @@ function render_layout(layout, ctx) {
    for (let i= 1; i < layout.nodes.length; i++) {
       let node= layout.nodes[i]
       if (node && node.parent_id) {
-         // don't render unless it's within 50% of the distance it's supposed to be
          let parent= layout.nodes[node.parent_id];
-         let parent_dx= node.x - parent.x;
-         if (1 || !node.goal_parent_dx || (parent_dx / node.goal_parent_dx > .5)) {
+         let parent_dx= Math.abs(node.x - parent.x);
+         // Fade the line out to nothing if it is far away from the parent
+         let begin_fade_dx= Math.max(Math.abs(node.goal_x_ofs * 2), layout.canvas_rect.width * .1);
+         let end_fade_dx= Math.max(Math.abs(node.goal_x_ofs * 4), layout.canvas_rect.width * .15);
+         if (parent_dx < end_fade_dx) {
+            let alpha= parent_dx < begin_fade_dx? 1 : 1 - (parent_dx - begin_fade_dx)/(end_fade_dx - begin_fade_dx);
+            ctx.strokeStyle= 'rgba(' + (node.red? 255 : 0) + ',0,0,' + alpha + ')'
             ctx.lineWidth= 1;
-            ctx.strokeStyle= node.red? "red" : "black";
             ctx.beginPath(); ctx.moveTo(node.x, node.y); ctx.lineTo(parent.x, parent.y); ctx.stroke();
          }
       }
