@@ -1,9 +1,22 @@
 html {
-   background-color: white;
+   background-color: #EEE;
    color: black;
+   font-family: Helvetica;
 }
 body {
+   height:100vh;
+   max-height: 100vh;
+   margin: 0;
+   padding: 0;
    display: flex;
    flex-direction: column;
    align-items: stretch;
+   overflow: hidden;
+}
+#app {
+   height: 100vh;
+   max-height: 100vh;
+   margin: 0; padding: 0;
+   display: flex;
+   flex-direction: column;
 }

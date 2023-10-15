@@ -8,6 +8,11 @@ import RBHashArrayView from './component/RBHashArrayView.vue'
 import RBHashVisualizer from './component/RBHashVisualizer.vue'
 import RBHash from './RBHash.js'
 
+// enables v-focus in templates
+const vFocus = {
+  mounted: (el) => el.focus()
+}
+
 const show_description= ref(true)
 const hash_function= ref('sum')
 const rbhash_capacity= ref(15);
@@ -55,6 +60,9 @@ function hashfunc(str) {
       for (let i= 0; i < str.length; i++)
          x += str.codePointAt(i);
       return x;
+   }
+   if (hash_function.value == 'md5') {
+      // TODO
    }
    if (hash_function.value == 'murmur') {
       // This is (mostly) MurmurHash32 by Austin Appleby, simplified for JavaScript
@@ -245,9 +253,7 @@ async function delete_value(value) {
       algorithm, as described in
       <i>Berman and Paul. Sequential and Parallel Algorithms. 1997 (ISBN:0-534-94674-7)</i>
       although it underwent some fairly drastic changes when I converted it to use an array of
-      integers.
-      This is also my second experiment using <a href="https://vuejs.org/">Vue 3</a>, and turned
-      out pretty well, though you probably shouldn't use this as example Vue code to learn from.
+      integers.  This demo is written using <a href="https://vuejs.org/">Vue 3</a>.
       </p>
       <button @click="show_description=false">Close</button>
    </div>
@@ -257,6 +263,7 @@ async function delete_value(value) {
             <label>Hash Function:
                <select name="hash_function" v-model="hash_function">
                <option value="murmur">MurmurHash32</option>
+               <!-- <option value="md5">MD5</option> -->
                <option value="sum">Sum of Characters</option>
                <option value="firstlast">First and Last Character</option>
                <option value="zero">The Number Zero</option>
@@ -275,13 +282,15 @@ async function delete_value(value) {
                </button>
             </div>
          </div>
-         <RBHashArrayView :rbhash=rbhash :user_array=user_array :markup=vis_markup
-            @node-click="(e) => select_node(e.node_id)"
-         />
+         <div class="arrayview-container">
+            <RBHashArrayView :rbhash=rbhash :user_array=user_array :markup=vis_markup
+               @node-click="(e) => select_node(e.node_id)"
+            />
+         </div>
       </div>
       <div style="flex-grow: 1">
          <div class="ops">
-            <label>Key: <input name="value" :disabled="step_promise" v-model="search_key" @keyup.enter="add_value()" /></label>
+            <label>Key: <input ref="search_blank" :disabled="step_promise" v-focus v-model="search_key" @keyup.enter="add_value()" /></label>
             <button type="button" :disabled="step_promise" @click="add_value()">Add</button>
             <button type="button" :disabled="step_promise" @click="delete_value()">Delete</button>
             <br>
@@ -307,9 +316,8 @@ h3 { margin: 8px; padding: 0px; }
 .description.collapse { display: none; }
 .app {
    min-width: 800px;
-   margin: 0 auto;
    min-height: 400px;
-   padding: 1em;
+   padding: 16px;
    display: flex;
    gap: 8px;
    align-items: stretch;
@@ -328,6 +336,9 @@ h3 { margin: 8px; padding: 0px; }
    display: flex; gap: 8px;
 }
 .ops button { margin: 0 0 0 .5em; }
+.arrayview-container {
+   overflow-y: scroll;
+}
 .main {
    display: flex; gap: 16px;
 }
