@@ -286,7 +286,7 @@ async function delete_value(value) {
             <label>Step Through Algorithm <input type="checkbox" v-model="enable_step"></label>
             <button type="button" @click="step()" :style="'visibility:'+(step_promise? 'visible':'hidden')">Step</button>
          </div>
-         <div style="border: 1px solid black">
+         <div style="border: 1px solid black; background-color: white;">
             <RBHashVisualizer ref="vis" :rbhash=rbhash :user_array=user_array :markup=vis_markup
                @node-click="(e) => select_node(e.node_id)"
             />
@@ -300,7 +300,7 @@ async function delete_value(value) {
 
 <style scoped>
 h3 { margin: 8px; padding: 0px; }
-.description { margin: 4px; box-shadow: 1px 2px 3px; padding: 8px; }
+.description { margin: 4px; box-shadow: 1px 2px 3px; padding: 8px; background-color: white; }
 .description p { margin-top: 0; }
 .description.collapse { display: none; }
 .app {

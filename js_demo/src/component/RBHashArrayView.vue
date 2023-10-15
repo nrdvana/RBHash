@@ -88,7 +88,7 @@ td.blank { visibility: hidden; }
 .user-el { width: auto; padding: 4px; }
 .user-el.selected {
    color: #440;
-   background-image: linear-gradient(to left, #FFF, #FFA);
+   background-image: linear-gradient(to left, #FFFFFF00, #FF9);
 }
 .node, .bucket {
    min-width: 6em;
@@ -97,7 +97,7 @@ td.blank { visibility: hidden; }
 .node.selected {
    color: #440;
    font-weight: bold;
-   background-image: linear-gradient(to right, #FFF, #FFA);
+   background-image: linear-gradient(to right, #FFFFFF00, #FF9);
 }
 .node-id {
    font-family: monospace, sans-serif;
