@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<title>RBHash C Library Generator</title>
+	<link rel="stylesheet" href="yamb.css" >
+	<link rel="stylesheet" href="main.css" >
+</head>
+<body>
+	<h1>RBHash C Library Generator</h1>
+	<form action="/generate" method="POST">
+		<label>Min Bits <select name="min_bits"><option value="8"><option value="16"><option value="32"><option value="64"></select></label>
+		<label>Max Bits <select name="max_bits"><option value="8"><option value="16"><option value="32"><option value="64"></select></label>
+		<label>Generate Code For:</label>
+		<label><input type="checkbox" name="feature_print" value="1"> rbhash_print (to FILE*, for debugging)</label>
+		<label><input type="checkbox" name="feature_check" value="1"> rbhash_check (runtime validation of structure)</label>
+		<label><input type="checkbox" name="feature_demo" value="1"> rbhash_demo.c (CLI demo application)</label>
+	</form>
+</body>
+</html>
