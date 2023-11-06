@@ -8,6 +8,11 @@
 ## param $feature_print= 1;
 ## param $feature_demo= 0;
 ## param $run_with_scissors= 0;
+## param @public_includes = (
+##   qw( <stdint.h> <stdlib.h> <stdbool.h> <assert.h> ),
+##   qw( <stdio.h> <string.h> )x!!($feature_print || $feature_demo)
+## );
+## param @private_includes = qw( "rbhash.h" );
 
 ## my $NAMESPACE= uc($namespace);
 ## my @bits= map +(1<<$_), (log($min_bits)/log(2)) .. (log($max_bits)/log(2));
@@ -16,14 +21,11 @@
 
 ## section PUBLIC;
 
-#include <stdint.h>
-#include <stdlib.h>
-#include <stdbool.h>
-#include <assert.h>
+#include $_  ## for @public_includes
 
 ## section PRIVATE;
 
-#include "rbhash.h"
+#include $_  ## for @private_includes
 
 // A setting that disables all the runtime sanity checks and safeguards
 #ifndef ${NAMESPACE}_RUN_WITH_SCISSORS
@@ -31,11 +33,13 @@
 #endif
 
 #ifndef ${NAMESPACE}_ASSERT
-   /* the assertions of this library are fairly important since so much of the
+   /* The assertions of this library are fairly important since so much of the
     * implementation is exposed to the rest of the program, so only actually
     * remove the checks if RUN_WITH_SCISSORS is set.
     */
-   #if defined(NDEBUG) && !${NAMESPACE}_RUN_WITH_SCISSORS
+   #if ${NAMESPACE}_RUN_WITH_SCISSORS
+      #define ${NAMESPACE}_ASSERT(x) (void)0
+   #elif defined(NDEBUG)
       #define ${NAMESPACE}_ASSERT(x) if (!(x)) return 0
    #else
       #define ${NAMESPACE}_ASSERT(x) assert(x)
@@ -183,9 +187,7 @@ size_t ${namespace}_find(
  * or the node pointer where it would exist.  The path can be used for
  * inserting or deleting without re-comparing any elements.
  *
- * See documentation of ${NAMESPACE}_SIZEOF_PATH,
- * ${NAMESPACE}_DECLARE_STACK_PATH, and ${NAMESPACE}_INIT_STACK_PATH
- * for details on how to create the 'path' parameter.
+ * The path should already have been initialized using `${namespace}_path_init`.
  */
 size_t ${namespace}_find_path(
    void *rbhash, size_t capacity, ${namespace}_path *path, size_t bucket_idx,
@@ -193,7 +195,8 @@ size_t ${namespace}_find_path(
 ) {
    size_t ref, node= 0;
    int cmp, p_i= 0, p_lim= path->lim;
-   if (p_lim < 1) { path->len= 0; return 0; }
+   path->len= 0; // in case $assert calls 'return 0'
+   $assert(p_lim > 0);
 ## for my $bits (@bits) {
 ##   my $word_t= word_type($bits);
 ##   my $else= $bits > $min_bits? ' else':'';
@@ -203,16 +206,14 @@ size_t ${namespace}_find_path(
       node= rbhash_w[ path->refs[0] ] >> 1;
       while (node && (cmp= ${{$default_compare_fn->('node')}})) {
          ref= (node<<1) | (cmp < 0? 0 : 1);
-         if (++p_i >= p_lim) { path->len= 0; return 0; }
+         $assert(++p_i < p_lim);
          path->refs[p_i]= ref;
          node= rbhash_w[ref] >> 1;
       }
    }
 ## }
    else {
-      path->len= 0; // in case the assertion calls 'return 0'
       $assert(capacity <= ${NAMESPACE}_MAX_ELEMENTS_$max_bits);
-      return 0; // in case the assertion is a no-op
    }
    path->len= p_i+1;
    return node;
@@ -658,9 +659,6 @@ extern size_t ${namespace}_path_delete_$bits($word_t *rbhash, ${namespace}_path 
 
 ## if ($feature_print) {
 ##   section PUBLIC;
-
-#include <stdio.h>
-#include <string.h>
 
 // Handy for gdb:
 //    p ${namespace}_print(rbhash, capacity, NULL, NULL, stdout)

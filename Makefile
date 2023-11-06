@@ -5,10 +5,10 @@ rbhash.c rbhash.h: rbhash.cpppp
 	cpppp rbhash.cpppp --features=print,demo --section-out public=rbhash.h -o rbhash.c
 
 rbhash.o: rbhash.c rbhash.h
-	gcc -c -O0 -g3 -Wall -o rbhash.o rbhash.c
+	gcc -c -O1 -g3 -Wall -o rbhash.o rbhash.c
 
 clean:
-	rm -f rbhash.c rbhash.h rbhash.o rbhash-demo
+	rm -f rbhash.c rbhash.c.* rbhash.h rbhash.h.* rbhash.o rbhash-demo
 
 .PHONY: clean
 
