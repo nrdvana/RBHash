@@ -5,19 +5,7 @@
  */
 
 /*! YAMB CSS v1.0.0 | BOML License | github.com/runxel/yamb-css */
-
-/* load your custom fonts like this
- * WOFF2 is enough (except you have to support IE11? Have fun with that shipwreck!)
- * Also please selfhost them and DO NOT use Google Fonts directly
- * https://www.tunetheweb.com/blog/should-you-self-host-google-fonts/
- */
-@font-face {
-  font-family: 'My Font';
-  font-style: normal;
-  font-weight: 400;
-  src: local('My Font'), local('MyFont-Regular'),
-       url('../fonts/myfont.woff2') format('woff2');
-}
+/* Modified slightly, see "git log generator/public/yamb.css" */
 
 /* obligatory element reset
  * if you look for a more in-depth, proper approach:

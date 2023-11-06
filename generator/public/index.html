@@ -1,19 +1,69 @@
 <!DOCTYPE html>
 <html>
 <head>
-	<title>RBHash C Library Generator</title>
-	<link rel="stylesheet" href="yamb.css" >
-	<link rel="stylesheet" href="main.css" >
+   <title>RBHash C Library Generator</title>
+   <meta charset="utf-8">
+   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+   <link rel="stylesheet" href="yamb.css" >
+   <link rel="stylesheet" href="main.css" >
 </head>
-<body>
-	<h1>RBHash C Library Generator</h1>
-	<form action="/generate" method="POST">
-		<label>Min Bits <select name="min_bits"><option value="8"><option value="16"><option value="32"><option value="64"></select></label>
-		<label>Max Bits <select name="max_bits"><option value="8"><option value="16"><option value="32"><option value="64"></select></label>
-		<label>Generate Code For:</label>
-		<label><input type="checkbox" name="feature_print" value="1"> rbhash_print (to FILE*, for debugging)</label>
-		<label><input type="checkbox" name="feature_check" value="1"> rbhash_check (runtime validation of structure)</label>
-		<label><input type="checkbox" name="feature_demo" value="1"> rbhash_demo.c (CLI demo application)</label>
-	</form>
-</body>
+<body><div id="top" class="page" role="document">
+   <h1>RBHash C Library Generator</h1>
+   <form action="/generate" method="POST">
+      <h2>Main Library <small>(rbhash.h / rbhash.c)</small></h2>
+      <fieldset><legend>Namespace</legend>
+         <input type="text" value="rbhash">
+         <small>(prefix applied to all names, with '_' separator)</small>
+      </fieldset>
+      <fieldset>
+         <legend>Dynamic word-size scaling</legend>
+         <div style="display:flex; gap: 1em;">
+         <label>Min Bits
+            <select name="min_bits">
+               <option value="8" selected="selected">8</option>
+               <option value="16">16</option>
+               <option value="32">32</option>
+               <option value="64">64</option>
+            </select></label>
+         <label>Max Bits
+            <select name="max_bits">
+               <option value="8">  8</option>
+               <option value="16">16</option>
+               <option value="32" selected="selected">32</option>
+               <option value="64">64</option>
+            </select></label>
+         </div>
+         <div style="display:flex; flex-wrap: wrap; gap: 1em">
+            <label>8-bit Type <input type="text" style="width: 8em;" value="uint8_t"></label>
+            <label>16-bit Type<input type="text" style="width: 8em;" value="uint16_t"></label>
+            <label>32-bit Type<input type="text" style="width: 8em;" value="uint32_t"></label>
+            <label>64-bit Type<input type="text" style="width: 8em;" value="uint64_t"></label>
+         </div>
+         <label>Array Index Type <input type="text" style="width: 8em;" value="size_t"></label>
+      </fieldset>
+      <fieldset>
+         <legend>Node-Comparison Callback</legend>
+         <table>
+            <label>API Parameters</label>
+            <br><small>(added to functions find, find_path, insert, delete)</small>
+            <div style="margin: 1em; display: flex; flex-wrap: wrap; gap: 1em;">
+               <input type="text" value="int (*cmp_cb)(void *, size_t)">
+               <input type="text" value="void *userdata">
+               <input type="text" value="">
+               <input type="text" value="">
+               <input type="text" value="">
+            </div>
+         </table>
+         <label>Comparison Call<input type="text" value="cmp_cb(userdata, $node_id)"></label>
+      </fieldset>
+      <fieldset>
+         <legend>Types</legend>
+         <p><label>Generate Code For:</label>
+         <br><label><input type="checkbox" name="feature_print" value="1"> rbhash_print <small>(to FILE*, for debugging)</small></label>
+         <br><label><input type="checkbox" name="feature_check" value="1"> rbhash_check <small>(runtime validation of structure)</small></label>
+         <br><label><input type="checkbox" name="feature_demo" value="1"> rbhash_demo.c <small>(CLI demo application)</small></label>
+      </fieldset>
+      <button>Generate</button>
+   </form>
+</div></body>
 </html>
