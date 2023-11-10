@@ -1,8 +1,8 @@
 ## param $namespace = 'rbhash';
 ## param $min_bits  = 8;
 ## param $max_bits  = 8;
-## param @default_compare_args= ('int (*cmp_cb)(void *, size_t)', 'void *userdata');
-## param $default_compare_fn = sub($node_id){ "cmp_cb(userdata, $node_id)" };
+## param @default_search_args= ('int (*cmp_callback)(void *, size_t)', 'void *userdata');
+## param $default_search_cmp = "cmp_callback(userdata, node_id)";
 ## param @treeprint_args;
 ## param $debug= 0;
 ## param $feature_print= 1;
@@ -104,33 +104,33 @@ struct ${namespace}_path_${bits} {
 ## section PRIVATE;
 void ${namespace}_path_${bits}_init(struct ${namespace}_path_${bits} *p);
 ## section PUBLIC;
+
 inline void ${namespace}_path_${bits}_init(struct ${namespace}_path_${bits} *p) {
    p->len= 0;
    p->lim= ${NAMESPACE}_MAX_TREE_HEIGHT_${bits};
 }
 
 ## }
+
 // Different template output may end up with different structs claiming
 // the name of ${namespace}_path, but that should be OK.
 typedef struct ${namespace}_path_${max_bits} ${namespace}_path;
 #define ${namespace}_path_init(p) ${namespace}_path_${max_bits}_init(p)
 
-extern size_t ${namespace}_find(void *rbhash, size_t capacity, size_t bucket_idx, @default_compare_args);
-extern size_t ${namespace}_insert(void *rbhash, size_t capacity, size_t node_id, size_t bucket_idx, @default_compare_args);
-extern size_t ${namespace}_delete(void *rbhash, size_t capacity, size_t bucket_idx, @default_compare_args);
-
-extern size_t ${namespace}_find_path(void *rbhash, size_t capacity, ${namespace}_path *path, size_t bucket_idx, @default_compare_args);
+// Iterate one or more places through the R/B tree of a bucket, updating 'path'
 extern size_t ${namespace}_path_step(void *rbhash, size_t capacity, ${namespace}_path *path, int ofs);
+
+// Exchange the tree node of one node_id (at the end of 'path') for another node_id
 extern size_t ${namespace}_path_swap(void *rbhash, size_t capacity, ${namespace}_path *path, size_t new_node_id);
 
-## for my $bits (@bits) {
-##   my $word_t= word_type($bits);
-extern size_t ${namespace}_path_insert_$bits($word_t *rbhash, ${namespace}_path *path, size_t node);
-extern size_t ${namespace}_path_delete_$bits($word_t *rbhash, ${namespace}_path *path);
-## }
-
+// implementation detail used to reduce size of inline functions
 extern size_t ${namespace}_capacity_bounds_assertion(size_t capacity);
 
+// Add a node_id at the end of 'path', and balance the tree if needed
+## for my $bits (@bits) {
+##   my $word_t= word_type($bits);
+extern size_t ${namespace}_path_insert_$bits($word_t *rbhash, ${namespace}_path *path, size_t node_id);
+## }
 inline size_t ${namespace}_path_insert(void *rbhash, size_t capacity, ${namespace}_path *path, size_t node) {
    return
 ## for my $bits (@bits) {
@@ -140,6 +140,11 @@ inline size_t ${namespace}_path_insert(void *rbhash, size_t capacity, ${namespac
       ${namespace}_capacity_bounds_assertion(capacity);
 }
 
+// Remove the node_id from the end of 'path', and balance the tree if needed
+## for my $bits (@bits) {
+##   my $word_t= word_type($bits);
+extern size_t ${namespace}_path_delete_$bits($word_t *rbhash, ${namespace}_path *path);
+## }
 inline size_t ${namespace}_path_delete(void *rbhash, size_t capacity, ${namespace}_path *path) {
 ## for my $bits (@bits) {
 ##   my $word_t= word_type($bits);
@@ -148,13 +153,35 @@ inline size_t ${namespace}_path_delete(void *rbhash, size_t capacity, ${namespac
       ${namespace}_capacity_bounds_assertion(capacity);
 }
 
-## section PRIVATE;
+## # Define a search API for a custom comparison function
+## # Parameters:
+## #   sub_ns:   namespace component to be appended to the rbhash namespace
+## #   api_args: arrayref of C function parameters (strings) added to each search function
+## #   cmp:      a string of C that calls a function to compare node_id with the search_args
+## #   header:   if set, emits the API declarations into that named section.  default is 'public'
+## #   unit:     if set, emits the implementation into that named section. default is the current section.
+##
+## sub define_search_api(%options) {
+##    my $search_ns= $namespace;
+##    $search_ns .=  '_' . $options{sub_ns} if length($options{sub_ns}//'');
+##    my @search_args= $options{api_args} or die "'search_args' are required\n";
+##    my $search_cmp= $options{cmp} or die "'cmp' is required\n";
+##
+##    my $orig_section= $self->current_output_section;
+##    section($options{header} || PUBLIC);
+// Find a node_id matching the search criteria and fill in the 'path' to it, else return 0
+extern size_t ${search_ns}_find_path(void *rbhash, size_t capacity, ${namespace}_path *path, size_t bucket_idx, @search_args);
 
-/* Only called when capacity is out of bounds. Used by the inline bit-selectors. */
-extern size_t ${namespace}_capacity_bounds_assertion(size_t capacity) {
-   $assert(capacity <= ${NAMESPACE}_MAX_ELEMENTS_$max_bits);
-   return 0;
-}
+// Simplified search for node_id, without building a path
+extern size_t ${search_ns}_find(void *rbhash, size_t capacity, size_t bucket_idx, @search_args);
+
+// Insert a node_id, unless one already matches the search criteria
+extern size_t ${search_ns}_insert(void *rbhash, size_t capacity, size_t node_id, size_t bucket_idx, @search_args);
+
+// Delete a node matching the search criteria
+extern size_t ${search_ns}_delete(void *rbhash, size_t capacity, size_t bucket_idx, @search_args);
+
+##    section($options{unit} || $orig_section);
 
 /* Find a node in the hash table, or tree.  Returns the node_id, or 0 if no
  * nodes match.
@@ -162,25 +189,25 @@ extern size_t ${namespace}_capacity_bounds_assertion(size_t capacity) {
  * This is a simplified version of find_path that doesn't keep track of the
  * path through the tree, saving time but not facilitating inserts or deletes.
  */
-size_t ${namespace}_find(
+size_t ${search_ns}_find(
    void *rbhash, size_t capacity, size_t bucket_idx,
-   @default_compare_args
+   @search_args
 ) {
-   size_t node= 0;
+   size_t node_id= 0;
    int cmp;
 ## for my $bits (@bits) {
 ##   my $word_t= word_type($bits);
 ##   my $else= $bits > $min_bits? ' else':'';
   $else if (capacity <= ${NAMESPACE}_MAX_ELEMENTS_$bits) {
-      node= (($word_t *)rbhash)[ ${NAMESPACE}_TABLE_WORD_OFS(capacity) + bucket_idx ] >> 1;
-      while (node && (cmp= ${{$default_compare_fn->('node')}}))
-         node= (($word_t *)rbhash)[ (node<<1) | (cmp < 0? 0 : 1) ] >> 1;
+      node_id= (($word_t *)rbhash)[ ${NAMESPACE}_TABLE_WORD_OFS(capacity) + bucket_idx ] >> 1;
+      while (node_id && (cmp= $search_cmp))
+         node_id= (($word_t *)rbhash)[ (node_id<<1) | (cmp < 0? 0 : 1) ] >> 1;
    }
 ## }
    else {
       $assert(capacity <= ${NAMESPACE}_MAX_ELEMENTS_$max_bits);
    }
-   return node;
+   return node_id;
 }
 
 /* Find a node in the hash table, and record the path to arrive at the node
@@ -189,11 +216,11 @@ size_t ${namespace}_find(
  *
  * The path should already have been initialized using `${namespace}_path_init`.
  */
-size_t ${namespace}_find_path(
+size_t ${search_ns}_find_path(
    void *rbhash, size_t capacity, ${namespace}_path *path, size_t bucket_idx,
-   @default_compare_args
+   @search_args
 ) {
-   size_t ref, node= 0;
+   size_t ref, node_id= 0;
    int cmp, p_i= 0, p_lim= path->lim;
    path->len= 0; // in case $assert calls 'return 0'
    $assert(p_lim > 0);
@@ -203,12 +230,12 @@ size_t ${namespace}_find_path(
   $else if (capacity <= ${NAMESPACE}_MAX_ELEMENTS_$bits) {
       $word_t *rbhash_w= ($word_t*) rbhash;
       path->refs[0]= ${NAMESPACE}_TABLE_WORD_OFS(capacity) + bucket_idx;
-      node= rbhash_w[ path->refs[0] ] >> 1;
-      while (node && (cmp= ${{$default_compare_fn->('node')}})) {
-         ref= (node<<1) | (cmp < 0? 0 : 1);
+      node_id= rbhash_w[ path->refs[0] ] >> 1;
+      while (node_id && (cmp= $search_cmp)) {
+         ref= (node_id<<1) | (cmp < 0? 0 : 1);
          $assert(++p_i < p_lim);
          path->refs[p_i]= ref;
-         node= rbhash_w[ref] >> 1;
+         node_id= rbhash_w[ref] >> 1;
       }
    }
 ## }
@@ -216,7 +243,7 @@ size_t ${namespace}_find_path(
       $assert(capacity <= ${NAMESPACE}_MAX_ELEMENTS_$max_bits);
    }
    path->len= p_i+1;
-   return node;
+   return node_id;
 }
 
 /* Insert a node into the hashtable, storing collisions in a tree.
@@ -224,21 +251,21 @@ size_t ${namespace}_find_path(
  * the new node, else it will insert and return your 'new_node' value.
  * If it returns node 0, you have a corrupted data structure.
  */
-extern size_t ${namespace}_insert(
-   void *rbhash, size_t capacity, size_t node_id, size_t bucket_idx,
-   @default_compare_args
+extern size_t ${search_ns}_insert(
+   void *rbhash, size_t capacity, size_t at_node_id, size_t bucket_idx,
+   @search_args
 ) {
-   size_t node= 0, ref= ${NAMESPACE}_TABLE_WORD_OFS(capacity) + bucket_idx;
+   size_t node_id= 0, ref= ${NAMESPACE}_TABLE_WORD_OFS(capacity) + bucket_idx;
    int cmp, p_i= 0, p_lim;
 ## for my $bits (@bits) {
 ##   my $word_t= word_type($bits);
 ##   my $else= $bits > $min_bits? ' else':'';
   $else if (capacity <= ${NAMESPACE}_MAX_ELEMENTS_$bits) {
       $word_t *rbhash_w= ($word_t*) rbhash;
-      node= rbhash_w[ref] >> 1;
-      if (!node) {
-         rbhash_w[ref]= node_id << 1;
-         return node_id;
+      node_id= rbhash_w[ref] >> 1;
+      if (!node_id) {
+         rbhash_w[ref]= at_node_id << 1;
+         return at_node_id;
       }
       else {
          struct ${namespace}_path_${bits} path;
@@ -246,14 +273,14 @@ extern size_t ${namespace}_insert(
          p_lim= path.lim;
          path.refs[0]= ref;
          do {
-            if (!(cmp= ${{$default_compare_fn->('node')}}))
-               return node;
-            ref= (node<<1) | (cmp < 0? 0 : 1);
-            if (++p_i >= p_lim)
-               return 0;
+            if (!(cmp= $search_cmp))
+               return node_id;
+            ref= (node_id<<1) | (cmp < 0? 0 : 1);
+            $assert(++p_i < p_lim);
             path.refs[p_i]= ref;
-            node= rbhash_w[ref] >> 1;
-         } while (node);
+            node_id= rbhash_w[ref] >> 1;
+         } while (node_id);
+         node_id= at_node_id;
          // Handle simple case of adding to black parent without invoking balance.
          if (!(rbhash_w[path.refs[p_i-1]] & 1)) {
             rbhash_w[ref]= (node_id << 1) | 1;
@@ -273,9 +300,9 @@ extern size_t ${namespace}_insert(
  * returns 0.  It may also return 0 if an assertion fails and you have disabled
  * aborting on assertions.
  */
-extern size_t ${namespace}_delete(
+extern size_t ${search_ns}_delete(
    void *rbhash, size_t capacity, size_t bucket_idx,
-   @default_compare_args
+   @search_args
 ) {
    size_t cur= 0, ref= ${NAMESPACE}_TABLE_WORD_OFS(capacity) + bucket_idx;
    int cmp, p_i= 0, p_lim;
@@ -290,11 +317,14 @@ extern size_t ${namespace}_delete(
          p_lim= path.lim;
          path.refs[0]= ref;
          
-         while ((cmp= ${{ $default_compare_fn->('cur >> 1') }})) {
+         #define node_id (cur >> 1)
+         while ((cmp= $search_cmp)) {
+         #undef node_id
             ref= (cur|1) ^ (cmp < 0? 1 : 0);
             cur= rbhash_w[ref];
-            if (!cur || ++p_i >= p_lim)
+            if (!cur)
                return 0;
+            $assert(++p_i < p_lim);
             path.refs[p_i]= ref;
          }
          path.len= p_i+1;
@@ -302,9 +332,25 @@ extern size_t ${namespace}_delete(
       }
    }
 ## }
+   $assert(capacity <= ${NAMESPACE}_MAX_ELEMENTS_${max_bits});
+   return 0;
+}
+
+##    section $orig_section;
+## } # end define_search_api
+##
+## section PRIVATE;
+
+/* Only called when capacity is out of bounds. Used by the inline bit-selectors. */
+extern size_t ${namespace}_capacity_bounds_assertion(size_t capacity) {
    $assert(capacity <= ${NAMESPACE}_MAX_ELEMENTS_$max_bits);
    return 0;
 }
+
+## define_search_api(
+##    api_args => \@default_search_args,
+##    cmp      => $default_search_cmp,
+## );
 
 /* Given a path to a node, make that path point to a new node assuming that
  * the new node contains the same search key that the old node used to.
@@ -321,11 +367,8 @@ extern size_t ${namespace}_path_swap(
    void *rbhash, size_t capacity, ${namespace}_path *path, size_t new_node_id
 ) {
    size_t ref;
-   #if !${NAMESPACE}_RUN_WITH_SCISSORS
    /* path must point to a node, and new_node_id must not be the sentinel */
-   if (path->len < 1 || !new_node_id)
-      return 0;
-   #endif
+   $assert(path->len > 0 && new_node_id);
 ## for my $bits (@bits) {
 ##    my $word_t= word_type($bits);
 ##    my $nodeint_t= $bits < 64? 'uint'.($bits*2).'_t' : undef;
@@ -334,11 +377,10 @@ extern size_t ${namespace}_path_swap(
       $word_t *rbhash_w= ($word_t*) rbhash, prev;
       // It is an error if new_node_id is not already zeroed
 ##    if ($nodeint_t) {
-      if ((($nodeint_t*) rbhash)[new_node_id])
+      $assert((($nodeint_t*) rbhash)[new_node_id] == 0);
 ##    } else {
-      if (rbhash_w[new_node_id << 1] || rbhash_w[(new_node_id << 1)|1])
+      $assert(rbhash_w[new_node_id << 1] == 0 && rbhash_w[(new_node_id << 1)|1] == 0);
 ##    }
-         return 0;
       // Swap the references
       ref= path->refs[path->len-1];
       prev= rbhash_w[ref];
@@ -357,6 +399,7 @@ extern size_t ${namespace}_path_swap(
       return prev >> 1;
    }
 ## }
+   $assert(capacity <= ${NAMESPACE}_MAX_ELEMENTS_${max_bits});
    return 0;
 }
 
@@ -661,7 +704,7 @@ extern size_t ${namespace}_path_delete_$bits($word_t *rbhash, ${namespace}_path 
 ##   section PUBLIC;
 
 // Handy for gdb:
-//    p ${namespace}_print(rbhash, capacity, NULL, NULL, stdout)
+//    p ${namespace}_print(rbhash, capacity, buckets, NULL, NULL, stdout)
 extern void ${namespace}_print(void *rbhash, size_t capacity, size_t n_buckets,
    void (*print_node)(void*,size_t,FILE*), void* userdata, FILE *out);
 
