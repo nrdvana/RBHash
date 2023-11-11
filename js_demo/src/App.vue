@@ -7,6 +7,8 @@ import { ref, triggerRef, watch } from 'vue'
 import RBHashArrayView from './component/RBHashArrayView.vue'
 import RBHashVisualizer from './component/RBHashVisualizer.vue'
 import RBHash from './RBHash.js'
+import murmur3 from 'murmur'
+import md5 from 'md5-slim'
 
 // enables v-focus in templates
 const vFocus = {
@@ -62,39 +64,10 @@ function hashfunc(str) {
       return x;
    }
    if (hash_function.value == 'md5') {
-      // TODO
+      return parseInt('0x' + md5(str).substr(0,8));
    }
    if (hash_function.value == 'murmur') {
-      // This is (mostly) MurmurHash32 by Austin Appleby, simplified for JavaScript
-      // https://github.com/aappleby/smhasher/blob/master/src/MurmurHash3.cpp#L94
-      let hash= 0;
-      let bytes= new Array(str.length);
-      for (let i= 0; i < str.length; i++) {
-         let cp= str.codePointAt(i);
-         while (cp) {
-            bytes.push(cp & 0xFF);
-            cp >>= 8;
-         }
-      }
-      while (bytes.length & 3)
-         bytes.push(0);
-      for (let i= 0; i < bytes.length / 4; i++) {
-         let k1= (bytes[i+3] << 24) | (bytes[i+2] << 16)
-            | (bytes[i+1] << 8) | bytes[i];
-         k1 *= 0xcc9e2d51;
-         k1 = (k1 << 15) | (k1 >> 17);
-         k1 *= 0x1b873593;
-         hash ^= k1;
-         hash= (hash << 13) | (hash >> 19);
-         hash= hash * 5 + 0xe6546b64;
-      }
-      hash ^= str.length;
-      hash ^= hash >> 16;
-      hash *= 0x85ebca6b;
-      hash ^= hash >> 13;
-      hash *= 0xc2b2ae35;
-      hash ^= hash >> 16;
-      return hash;
+      return murmur3.hash128(str).raw()[0];
    }
    if (hash_function.value == 'firstlast') {
       return str.codePointAt(0) * str.codePointAt(str.length-1);
@@ -253,7 +226,8 @@ async function delete_value(value) {
       algorithm, as described in
       <i>Berman and Paul. Sequential and Parallel Algorithms. 1997 (ISBN:0-534-94674-7)</i>
       although it underwent some fairly drastic changes when I converted it to use an array of
-      integers.  This demo is written using <a href="https://vuejs.org/">Vue 3</a>.
+      integers.  <a href="https://github.com/nrdvana/RBHash/tree/main/js_demo">This demo</a>
+      is written using <a href="https://vuejs.org/">Vue 3</a>.
       </p>
       <button @click="show_description=false">Close</button>
    </div>
@@ -262,8 +236,8 @@ async function delete_value(value) {
          <div class="config">
             <label>Hash Function:
                <select name="hash_function" v-model="hash_function">
-               <option value="murmur">MurmurHash32</option>
-               <!-- <option value="md5">MD5</option> -->
+               <option value="murmur" selected>MurmurHash3</option>
+               <option value="md5">MD5</option>
                <option value="sum">Sum of Characters</option>
                <option value="firstlast">First and Last Character</option>
                <option value="zero">The Number Zero</option>
