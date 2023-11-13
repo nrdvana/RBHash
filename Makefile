@@ -2,7 +2,7 @@ rbhash-demo: rbhash.o
 	gcc -o rbhash-demo rbhash.o
 
 rbhash.c rbhash.h: rbhash.cpppp
-	cpppp rbhash.cpppp --features=print,demo --section-out public=rbhash.h -o rbhash.c
+	cpppp rbhash.cpppp -p max_bits=16 --features=print,demo --section-out public=rbhash.h -o rbhash.c
 
 rbhash.o: rbhash.c rbhash.h
 	gcc -c -O1 -g3 -Wall -o rbhash.o rbhash.c

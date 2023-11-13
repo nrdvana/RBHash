@@ -1,0 +1,56 @@
+/*
+This is a placeholder for an idea of how to use RBHash in the nodes of a
+Trie to efficiently scale to very large collections.
+
+Start with a small RBHash, tuned for whatever sizes optimize your application.
+Enlarge it as needed for X less than 127.  (You'd probably want sizes that fit
+cleanly in 128, 256, 512 bytes and so on, with B as a power of 2)
+
+  struct rbhash_trie_node_X {
+    void *elements[X];
+    uint32_t el_hashcodes[X];
+    uint8_t free_list_head;
+    uint8_t free_list_count;
+    uint8_t rbhash[RBHASH_SIZEOF(X, B)];
+  };
+
+When inserting new nodes, use the 'free list' to find an empty `elements[]`
+slot, and then preserve the hash code in `el_hashcodes`, and then increment
+the `bucket_el_count` of the bucket it goes into.
+
+When reallocations reach the maximum of 126, use this struct, which comes out
+to exactly 2KiB:
+
+  struct rbhash_trie_node {
+    void *elements[128];          // 1024 bytes
+    uint32_t el_hashcodes[128];   // 512 bytes
+    int8_t bucket_el_count[128];  // 128 bytes
+    int8_t free_list_head;        // 1 byte
+    int8_t free_list_count;       // 1 byte
+    uint8_t rbhash[RBHASH_SIZEOF(126, 128)]; // 382 bytes
+  };
+
+When you have used up all 127 Node IDs of the RBHash, choose the largest
+bucket (by scanning `bucket_el_count`), create a new rbhash_trie_node_X for at
+least that capacity, and delete each element in that bucket adding it to the
+new rbhash_trie_node.  Then, store the pointer to the rbhat_node in the
+`elements[]` entry for that bucket.  (if it was occupied by an element, evict
+that element to a different slot and NodeID)  Add all the freed NodeIDs to the
+free_list and continue.
+
+From now on, when new elements are inserted, check whether the bucket for that
+hash code has been moved down to another layer and perform a trie behavior
+instead of using the RBHash.  Any other hash code prefix continues to use the
+RBHash.
+
+After about the 3rd descent down the trie (which indicates exceptional
+collisions for that hash code) either switch the hash algorithm or start
+using the bytes of the key itself as the hash code.
+
+When the NodeIDs are nearly exhausted (126 NodeIDs run out before 128 element
+pointers) convert the rest of the buckets to rbhash_trie_node sub-tries.  All
+insertions now pass through this trie node to deeper trie nodes and the RBHash
+is unused.  (unless deletions make it pragmatic to start reversing the process
+and consolidating sub-tries)
+
+*/
