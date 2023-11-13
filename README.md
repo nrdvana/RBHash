@@ -119,7 +119,7 @@ Drawbacks:
 
 ## Building
 
-The library is written as a [cpppp template](/nrdvana/RBHash/blob/main/rbhash.cpppp).
+The library is written as a [cpppp template](/rbhash.cpppp).
 Use the [cpppp tool](https://metacpan.org/pod/CodeGen::Cpppp) to convert that
 to `rbhash.h` and `rbhash.c` with the parameters of your choosing:
 
