@@ -233,7 +233,8 @@ size_t ${search_ns}_find_path(
       node_id= rbhash_w[ path->refs[0] ] >> 1;
       while (node_id && (cmp= $search_cmp)) {
          ref= (node_id<<1) | (cmp < 0? 0 : 1);
-         $assert(++p_i < p_lim);
+         ++p_i;
+         $assert(p_i < p_lim);
          path->refs[p_i]= ref;
          node_id= rbhash_w[ref] >> 1;
       }
@@ -276,7 +277,8 @@ extern size_t ${search_ns}_insert(
             if (!(cmp= $search_cmp))
                return node_id;
             ref= (node_id<<1) | (cmp < 0? 0 : 1);
-            $assert(++p_i < p_lim);
+            ++p_i;
+            $assert(p_i < p_lim);
             path.refs[p_i]= ref;
             node_id= rbhash_w[ref] >> 1;
          } while (node_id);
@@ -324,7 +326,8 @@ extern size_t ${search_ns}_delete(
             cur= rbhash_w[ref];
             if (!cur)
                return 0;
-            $assert(++p_i < p_lim);
+            ++p_i;
+            $assert(p_i < p_lim);
             path.refs[p_i]= ref;
          }
          path.len= p_i+1;
@@ -541,12 +544,14 @@ extern size_t ${namespace}_path_delete_$bits($word_t *rbhash, ${namespace}_path 
          // Descend one level to the left.
          // The path should always have room for this additional reference if it
          // was allocated to max-tree-height and the tree is actually balanced.
-         $assert(++p_i < p_lim);
+         ++p_i;
+         $assert(p_i < p_lim);
          parent_refs[p_i]= ref= (pos >> 1 << 1); // go left;
          alt= rbhash[ref]; // either ch1 or ch2, but now we know it's the left one
          // descend as many levels as possible to the right
          while ((alt= rbhash[ref= alt | 1])) {
-            $assert(++p_i < p_lim);
+            ++p_i;
+            $assert(p_i < p_lim);
             parent_refs[p_i]= ref;
          }
          // 'alt' is the node we swap with.
@@ -623,7 +628,8 @@ extern size_t ${namespace}_path_delete_$bits($word_t *rbhash, ${namespace}_path 
             sibling= rbhash[near_nephew_ref];
             rbhash[pos_ref ^ 1]= sibling;
             rbhash[near_nephew_ref]= pos_ref | 1; // former sibling sameside tree = parent, now red
-            $assert(++p_i < p_lim);
+            ++p_i;
+            $assert(p_i < p_lim);
             parent_refs[p_i] = near_nephew_ref; // insert new parent into list
          }
          // sibling will be black here
