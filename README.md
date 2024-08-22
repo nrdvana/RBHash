@@ -44,7 +44,7 @@ combined with another algorithm like a hash-trie for allocation efficiency at la
 For a user-supplied array allocated to a capacity of `N` elements, allocate `N` red/black tree
 nodes in a flat array and `B` hashtable buckets on the end of that same flat array, and store
 hash table collisions as a tree composed of the nodes corresponding to the colliding array
-elements.  In other words, for nodes `i_1`, `i_2`, `i_3` that all hashed to value `X (mod B)`
+elements.  In other words, for nodes `i_1`, `i_2`, `i_3` that all hashed to value `X (mod B)`,
 `bucket[X]` acts as a pointer to the head of a tree composed of `node[i_1], node[i_2], node[i_3]`.
 (In this implementation, Node ID 0 is reserved, so there's a +1 when going from an array index
 to a Node ID)

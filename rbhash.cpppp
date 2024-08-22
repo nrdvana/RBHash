@@ -1,6 +1,25 @@
+=head1 DESCRIPTION
+
+This generates the core red/black algorithm implemented as an integer array for a variety of
+bit-widths, along with a find/insert/delete API that can be tailored to your particular data
+and API requirements.  There are also several auxillary features that can be generated, like
+the console-printing or the demo app.
+
+The core red/black algorithms are generated in the usual 'public' and 'private' output section,
+and contain any function unrelated to the search key, such as _path_insert or _path_delete.
+These are shared among every custom front-end.  They should probably go into files named
+"rbhash.c" and "rbhash.h" with the standard 'namespace' of 'rbtree'.  You can override the
+headers written into these files using parameters '@public_includes' and '@pricate_includes'.
+If you also want a generic find/insert/delete that take callbacks instead of user data, call
+the method 'gen_search_api' with no options.
+
+Then, to adapt to your data type, you can call make_search_api again as many times as you want.
+
+=cut
+
 ## param $namespace = 'rbhash';
 ## param $min_bits  = 8;
-## param $max_bits  = 8;
+## param $max_bits  = 64;
 ## param @default_search_args= ('int (*cmp_callback)(void *, size_t)', 'void *userdata');
 ## param $default_search_cmp = "cmp_callback(userdata, node_id)";
 ## param @treeprint_args;
@@ -14,12 +33,25 @@
 ## );
 ## param @private_includes = qw( "rbhash.h" );
 
+## use CodeGen::Cpppp::Template "format_timestamp", "format_commandline";
+
 ## my $NAMESPACE= uc($namespace);
-## my @bits= map +(1<<$_), (log($min_bits)/log(2)) .. (log($max_bits)/log(2));
+## # If max_bits is a constant, we can iterate from min to max.  But if it is a macro name,
+## # we need to generate everything up to 64 and then sue ifdefs to exclude some of them.
+## my $max_bits_is_macro= ($max_bits !~ /^[0-9]+$/);
+## my @bits= grep { $_ >= $min_bits } 8, 16, 32, 64;
+## @bits= grep { $_ <= $max_bits } @bits unless $max_bits_is_macro;
 ## sub log2($x) { log($x)/log(2) }
 ## sub word_type($bits) { 'uint'.$bits.'_t' }
 
 ## section PUBLIC;
+
+#ifndef RBHASH_H
+#define RBHASH_H
+
+/* Generated on ${{ format_timestamp }} by cpppp $CodeGen::Cpppp::VERSION using command
+ * @{[ format_commandline ]}
+ */
 
 #include $_  ## for @public_includes
 
@@ -32,20 +64,32 @@
 #define ${NAMESPACE}_RUN_WITH_SCISSORS $run_with_scissors
 #endif
 
+/* implementation detail used to reduce size of inline functions */
+extern size_t ${namespace}_capacity_bounds_assertion(size_t capacity);
+
 #ifndef ${NAMESPACE}_ASSERT
    /* The assertions of this library are fairly important since so much of the
     * implementation is exposed to the rest of the program, so only actually
     * remove the checks if RUN_WITH_SCISSORS is set.
     */
    #if ${NAMESPACE}_RUN_WITH_SCISSORS
-      #define ${NAMESPACE}_ASSERT(x) (void)0
+      #define ${NAMESPACE}_ASSERT(x) ((void)0)
+      #define ${namespace}_capacity_bounds_assertion(x) 0
    #elif defined(NDEBUG)
-      #define ${NAMESPACE}_ASSERT(x) if (!(x)) return 0
+      #define ${NAMESPACE}_ASSERT(x) do { if (!(x)) return 0; } while(0)
+      #define ${namespace}_capacity_bounds_assertion(x) 0
    #else
       #define ${NAMESPACE}_ASSERT(x) assert(x)
    #endif
 #endif
+
 ## my $assert= "${NAMESPACE}_ASSERT";
+## section PRIVATE;
+/* Only called when capacity is out of bounds. Used by the inline bit-selectors. */
+extern size_t ${namespace}_capacity_bounds_assertion(size_t capacity) {
+   $assert(capacity <= ${NAMESPACE}_MAX_ELEMENTS_$max_bits);
+   return 0;
+}
 
 ## section PUBLIC;
 
@@ -66,15 +110,31 @@
 /* This macro selects the word size needed to index 'capacity' number of
  * user elements.
  */
+## sub bit_selector_ternary_expr($max) {
 #define ${NAMESPACE}_SIZEOF_WORD(capacity) ( \
-## for my $bits (@bits) {
-##   if ($bits < $max_bits) {
+##   for my $bits (@bits) {
+##     if ($bits < $max) {
            (capacity) <= ${NAMESPACE}_MAX_ELEMENTS_$bits? ${{ $bits/8 }} : \
-##   } else {
+##     } else {
            ${{ $bits/8 }} \
+##     }
 ##   }
-## }
         )
+## }
+
+## if ($max_bits_is_macro) {
+#if $max_bits > 32
+##   bit_selector_ternary_expr(64);
+#elif $max_bits > 16
+##   bit_selector_ternary_expr(32);
+#elif $max_bits > 8
+##   bit_selector_ternary_expr(16);
+#else
+##   bit_selector_ternary_expr(8);
+#endif
+## } else {
+#define ${NAMESPACE}_SIZEOF_WORD(capacity) 1
+## }
 
 /* This macro defines the total size (in bytes) of the rbhash storage
  * for a given number of elements and buckets.  This does not include
@@ -84,74 +144,708 @@
 #define ${NAMESPACE}_SIZEOF(capacity, buckets) ( \
            ${NAMESPACE}_SIZEOF_WORD(capacity) \
            * ( ${NAMESPACE}_TABLE_WORD_OFS(capacity) + buckets ) \
-        )
+         )
 
-/* Several functions can operate on a "path", which is a list of
- * references starting at the bucket and ending at a tree node.
- * The path is allocated to the maximum depth that a tree of that
- * word-bits-size could reach.  Since this drastically affects the
- * amount of stack used, a struct is declared for each word-bit size.
+/* This macro calculates the maximum capacity that could fit in a buffer of a
+ * specific size, after subtracting your chosen hash table size.
+ * The third option "sizeof_useritem" can be set to a nonzero value if you
+ * intend to allocate the rbhash on the end of a vector of user data items.
+ */
+#define ${NAMESPACE}_MAX_CAPACITY_OF_BUFFER(sizeof_buf, n_buckets, sizeof_useritem) ( \
+           (sizeof_buf - (n_buckets + 2) * ${NAMESPACE}_SIZEOF_WORD(capacity)) \
+            / (sizeof_useritem + ${NAMESPACE}_SIZEOF_WORD(capacity) * 2) \
+         )
+
+/* Several functions can operate on a "path", which is an array of the node
+ * references from the bucket (which is a reference to the tree root) down to
+ * the indicated node.  More specificallty, the integers in this list refer to
+ * the rbhash element which refers to a node, where the "reference" is also an
+ * integer composed of a color in bit 0 and a node_id in the upper bits.
+ * i.e. path->refs[0] will always be the index of one of the hash buckets.
+ * The color of the root node is always black, and the color is stored in the
+ * reference *to* the node rather than "in the node", so (path->refs[0] & 1)
+ * should always be zero.  In most cases, the path will end with a non-
+ * sentinel node reference (number greater than 0) but for calling 'insert'
+ * the final reference is expected to point to the sentinel and will be
+ * replaced by the newly inserted node.
  *
- * The structs each record their length so that they can be passed
- * interchangably to the functions.  You could even allocate custom
- * lengths with alloca, but that seems overcomplicated.
+ * The path is allocated to the maximum depth that a tree of that a word-size
+ * can could reach.  (${NAMESPACE}_MAX_TREE_HEIGHT_n)  Since this drastically
+ * affects the amount of stack used, a struct is declared for each word size.
+ *
+ * The allocated length is stored in the struct, so they are interchangable
+ * when passed to the API, but anything that creates or modifies a path may
+ * fail if you don't allocate it large enough, and that type of error will
+ * trigger an assertion failure, so always be sure to allocate the max tree
+ * height for your collection.
  */
 ## for my $bits (@bits) {
-struct ${namespace}_path_${bits} {
-   uint8_t len, lim;
+struct ${namespace}_path${bits} {
+   void *rbhash;
+   uint8_t len, lim, wordsize;
    size_t refs[${NAMESPACE}_MAX_TREE_HEIGHT_${bits}];
 };
 ## section PRIVATE;
-void ${namespace}_path_${bits}_init(struct ${namespace}_path_${bits} *p);
+void ${namespace}_path${bits}_init(struct ${namespace}_path${bits} *p, void *rbh, size_t cap, size_t bucket_idx);
 ## section PUBLIC;
 
-inline void ${namespace}_path_${bits}_init(struct ${namespace}_path_${bits} *p) {
-   p->len= 0;
+inline void ${namespace}_path${bits}_init(struct ${namespace}_path${bits} *p, void *rbh, size_t cap, size_t bucket_idx) {
+   p->rbhash= rbh;
+   p->wordsize= ${NAMESPACE}_SIZEOF_WORD(cap);
+   p->len= 1;
    p->lim= ${NAMESPACE}_MAX_TREE_HEIGHT_${bits};
+   p->refs[0]= ${NAMESPACE}_TABLE_WORD_OFS(cap) + bucket_idx;
+}
+## }
+
+/* Max bits get a typedef for easy declaration by API users.
+ * Each of the structs is actually equivalent since the 'lim' field declares the end of the
+ * allocated space, so it doesn't matter which type is passed into the functions that take
+ * a path parameter.
+ */
+## if ($max_bits_is_macro) {
+#if $max_bits > 32
+typedef struct ${namespace}_path64 ${namespace}_path;
+#define ${namespace}_path_init ${namespace}_path64_init
+#elif $max_bits > 16
+typedef struct ${namespace}_path32 ${namespace}_path;
+#define ${namespace}_path_init ${namespace}_path32_init
+#elif $max_bits > 8
+typedef struct ${namespace}_path16 ${namespace}_path;
+#define ${namespace}_path_init ${namespace}_path16_init
+#else
+typedef struct ${namespace}_path8 ${namespace}_path;
+#define ${namespace}_path_init ${namespace}_path8_init
+#endif
+## } else {
+typedef struct ${namespace}_path${max_bits} ${namespace}_path;
+#define ${namespace}_path_init ${namespace}_path${max_bits}_init
+## }
+
+## section PUBLIC;
+/* Redirect a path to either the leftmost or rightmost child of a node described by the path.
+ * If the path points to a leaf node, the path will be unchanged.  Returns the node_id of the
+ * leaf.  Aborts or returns 0 in the case of an incorrectly initialized path.
+ */
+extern size_t ${namespace}_seek(${namespace}_path *path, bool rightmost);
+
+## section PRIVATE;
+/* Redirect a path to either the leftmost or rightmost child of a node described by the path.
+ * The path must be initialized, pointing to a node_id.
+ * When finished, the path will be altered to point to the leftmost or right most child of
+ * the node.  If it fails, it returns 0 or aborts.
+ * If max_bits was a macro, this generates all of the switch blocks but then wraps them with a
+ * conditional size test to e.g. eliminate the 64-bit option on a 32-bit architecture.
+ */
+size_t ${namespace}_seek(${namespace}_path *path, bool rightmost) {
+   size_t idx= path->len-1, lim= path->lim, node, ref, direction= rightmost? 1 : 0;
+   $assert(1 <= path->len); /* path must point to a node */
+   $assert(path->len <= path->lim); /* can't start beyond bounds */
+   switch (path->wordsize) {
+## for my $bits (@bits) {
+##   my $word_t= word_type($bits);
+#if $max_bits >= $bits          ## if $max_bits_is_macro
+   case ${{ $bits/8 }}: {
+         $word_t *rbhash= ($word_t*) path->rbhash;
+         node= rbhash[path->refs[idx]] >> 1;
+         $assert(node);
+         ref= node << 1 | direction;
+         while ((node= rbhash[ref])) {
+            $assert(idx+1 < lim);
+            path->refs[++idx]= ref;
+            ref= node << 1 | direction;
+         }
+         node= ref >> 1;
+      }
+      break;
+#endif                          ## if $max_bits_is_macro
+## }
+   default:
+      // invalid wordsize
+      $assert(0);
+   }
+   path->len= idx+1;
+   return node;
 }
 
-## }
+## section PUBLIC;
+/* Iterate through the nodes of the R/B tree of a single bucket, updating 'path'.  'ofs' is the
+ * number of nodes to step from left to right, where negative numbers step to the left.
+ * Returns 0 at the end of iteration.
+ * You must first initialize the path to point at a node.
+ * Aborts or returns 0 in the case of an incorrectly initialized path.
+ */
+extern size_t ${namespace}_step(${namespace}_path *path, int ofs);
 
-// Different template output may end up with different structs claiming
-// the name of ${namespace}_path, but that should be OK.
-typedef struct ${namespace}_path_${max_bits} ${namespace}_path;
-#define ${namespace}_path_init(p) ${namespace}_path_${max_bits}_init(p)
-
-// Iterate one or more places through the R/B tree of a bucket, updating 'path'
-extern size_t ${namespace}_path_step(void *rbhash, size_t capacity, ${namespace}_path *path, int ofs);
-
-// Exchange the tree node of one node_id (at the end of 'path') for another node_id
-extern size_t ${namespace}_path_swap(void *rbhash, size_t capacity, ${namespace}_path *path, size_t new_node_id);
-
-// implementation detail used to reduce size of inline functions
-extern size_t ${namespace}_capacity_bounds_assertion(size_t capacity);
-
-// Add a node_id at the end of 'path', and balance the tree if needed
+## section PRIVATE;
+/* Iterate through the nodes of the R/B tree of a single bucket, updating 'path'.
+ * The path must be initialized, pointing to a node_id.  'ofs' is both a direction and an
+ * iteration count, where positive is rightward and negatigve is leftward.  If it runs out of
+ * nodes, it returns 0.  It also returns 0 if assertions fail and NDEBUG is defined.
+ * If max_bits was a macro, this generates all of the switch blocks but then wraps them with a
+ * conditional size test to e.g. eliminate the 64-bit option on a 32-bit architecture.
+ */
+size_t ${namespace}_step(${namespace}_path *path, int ofs) {
+   size_t idx= path->len-1, lim= path->lim, node, ref, direction= rightmost? 1 : 0;
+   int cmp, direction= ofs > 0? 1 : 0;
+   if (!direction) ofs= -ofs;
+   assert(1 <= path->len); // path must point to a node
+   assert(path->len <= path->lim); // can't start beyond bounds
+   switch (path->wordsize) {
 ## for my $bits (@bits) {
 ##   my $word_t= word_type($bits);
-extern size_t ${namespace}_path_insert_$bits($word_t *rbhash, ${namespace}_path *path, size_t node_id);
+#if $max_bits >= $bits          ## if $max_bits_is_macro
+   case ${{ $bits/8 }}: {
+         $word_t *rbhash= ($word_t*) path->rbhash;
+         node= rbhash[path->refs[idx]] >> 1;
+         $assert(node);
+         while (ofs--) {
+            // Is there a child node in the requested direction?
+            ref= node << 1 | direction;
+            if ((node= rbhash[ref] >> 1)) {
+               $assert(idx+1 < lim);
+               path->refs[++idx]= ref;
+               // seek to the furthest child in the opposite direction
+               ref= node << 1 | (direction^1);
+               while ((node= rbhash[ref] >> 1)) {
+                  $assert(idx+1 < lim);
+                  path->refs[++idx]= ref;
+                  ref= node << 1 | (direction^1);
+               }
+            }
+            // else backtrack to first parent from that direction
+            else {
+               do {
+                  if (!idx--) return 0;
+                  // Keep going as long as the ref was from the same direction.
+                  // A ref to a left child is even and a ref to a right child is odd.
+               } while ((path->refs[idx] & 1) == direction);
+            }
+         }
+      }
+      break;
+#endif                          ## if $max_bits_is_macro
 ## }
-inline size_t ${namespace}_path_insert(void *rbhash, size_t capacity, ${namespace}_path *path, size_t node) {
-   return
-## for my $bits (@bits) {
-##   my $word_t= word_type($bits);
-      (capacity <= ${NAMESPACE}_MAX_ELEMENTS_$bits)? ${namespace}_path_insert_$bits(($word_t*) rbhash, path, node) :
-## }
-      ${namespace}_capacity_bounds_assertion(capacity);
+   default:
+      /* invalid wordsize */
+      $assert(0);
+   }
+   path->len= idx+1;
+   return path->refs[idx];
 }
 
-// Remove the node_id from the end of 'path', and balance the tree if needed
+## section PUBLIC;
+/* Given a path to old_node, replace that node of the tree with a new_node which will assume
+ * the original's position within the tree. i.e. the parent of old_node will now point to
+ * new_node and the new_node will point to old_node's children.  This must only be used when
+ * the new_node's key sorts to the same position as old_node's key.  new_node must have already
+ * been initialized to not reference child nodes.  Returns the id of old_node.
+ *
+ * This is an O(1) operation, though building the path probably took O(log N).
+ * Aborts or returns 0 in the case of an incorrectly initialized path, invalid new_node_id, or
+ * invalid tree state.
+ */
+extern size_t ${namespace}_swap(${namespace}_path *path, size_t new_node_id);
+
+## section PRIVATE;
+/* Given a path to old_node, replace that node of the tree with a new_node which will assume
+ * the original's position within the tree. i.e. the parent of old_node will now point to
+ * new_node and the new_node will point to old_node's children.  This must only be used when
+ * the new_node's key sorts to the same position as old_node's key.  new_node must have already
+ * been initialized to not reference child nodes.  Returns the id of old_node.
+ *
+ * This is an O(1) operation, though building the path probably took O(log N).
+ * Aborts or returns 0 in the case of an incorrectly initialized path, invalid new_node_id, or
+ * invalid tree state.
+ *
+ * If max_bits was a macro, this generates all of the switch blocks but then wraps them with a
+ * conditional size test to e.g. eliminate the 64-bit option on a 32-bit architecture.
+ */
+extern size_t ${namespace}_swap(${namespace}_path *path, size_t new_node_id) {
+   size_t ref;
+   // path must be valid, and new_node_id must not be the sentinel
+   $assert(0 < path->len && path->len <= path->lim);
+   $assert(new_node_id > 0);
+   switch (path->wordsize) {
 ## for my $bits (@bits) {
-##   my $word_t= word_type($bits);
-extern size_t ${namespace}_path_delete_$bits($word_t *rbhash, ${namespace}_path *path);
+##    my $word_t= word_type($bits);
+##    my $nodeint_t= $bits < 64? 'uint'.($bits*2).'_t' : undef;
+#if $max_bits >= $bits          ## if $max_bits_is_macro
+   case ${{ $bits/8 }}: {
+         $word_t *rbhash= ($word_t*) path->rbhash, prev;
+         // It is an error if new_node_id is not already zeroed
+##    if ($nodeint_t) {
+         $assert((($nodeint_t*) rbhash)[new_node_id] == 0);
+##    } else {
+         $assert(rbhash_w[new_node_id << 1] == 0 && rbhash_w[(new_node_id << 1)|1] == 0);
+##    }
+         // Swap the references
+         ref= path->refs[path->len-1];
+         prev= rbhash[ref];
+         rbhash[ref]= (new_node_id << 1) | (prev&1);
+##    if ($nodeint_t) {
+         (($nodeint_t*) rbhash)[new_node_id]= (($nodeint_t*) rbhash)[prev>>1];
+         // and clear out the 'prev' before returning it
+         (($nodeint_t*) rbhash)[prev>>1]= 0;
+##    } else {
+         rbhash[new_node_id << 1]= rbhash[prev >> 1 << 1];
+         rbhash[(new_node_id << 1) | 1]= rbhash[prev|1];
+         // and clear out the 'prev' before returning it
+         rbhash[prev >> 1 << 1]= 0;
+         rbhash[prev|1]= 0;
+##    }
+         return prev >> 1;
+      }
+      break;
+#endif                          ## if $max_bits_is_macro
 ## }
-inline size_t ${namespace}_path_delete(void *rbhash, size_t capacity, ${namespace}_path *path) {
-## for my $bits (@bits) {
-##   my $word_t= word_type($bits);
-      (capacity <= ${NAMESPACE}_MAX_ELEMENTS_$bits)? ${namespace}_path_delete_$bits(($word_t*) rbhash, path) :
-## }
-      ${namespace}_capacity_bounds_assertion(capacity);
+   default:
+      /* invalid wordsize */
+      $assert(0);
+   }
+   return 0;
 }
+
+## section PUBLIC;
+/* Resolve a path to a node using a comparison callback function.
+ * The path must already be initialized to the root of the bucket based on
+ * the hash code, and be allocated to a size larger than the deepest possible
+ * tree.  The callback receives a user-supplied argument, and a node_id.
+ * Like strcmp, it should return less than one if the search key sorts less
+ * than the key associated with the node_id, greater if the opposite, and zero
+ * if the node_id corresponds to the search key.  It is up to the caller to
+ * know what key is related to any given node_id.
+ *
+ * If a match is found, this function updates the path to point to that node,
+ * and returns the node_id.  If no match is found, this function returns 0
+ * and the path is updated to end with the reference pointing to a sentinel
+ * which the insert function can change to point to a newly-inserted node_id
+ * so that an insert operation doesn't require any additional comparisons.
+ *
+ * It may also abort or return 0 if assertions fail.
+ */
+extern size_t $%{namespace}_find(
+   ${namespace}_path *path,
+   int (*compare_fn)(void *, size_t), void *compare_data
+);
+
+## section PRIVATE;
+/* Resolve a path to a node using a comparison callback function.
+ * The path must already be initialized to the root of the bucket based on
+ * the hash code, and then call this method to compare nodes looking for a
+ * match.
+ *
+ * Returns the node_id on success, or 0 if not found.
+ * It may also abort or return 0 if assertions fail.
+ */
+extern size_t $%{namespace}_find(
+   ${namespace}_path *path,
+   int (*compare_fn)(void *, size_t), void *compare_data
+) {
+   size_t node, idx= path->len - 1, lim= p->lim;
+   int cmp;
+   $assert(0 < path->len && path->len <= path->lim); // path must be valid
+   switch (path->wordsize) {
+## for my $bits (@bits) {
+##    my $word_t= word_type($bits);
+##    my $nodeint_t= $bits < 64? 'uint'.($bits*2).'_t' : undef;
+#if $max_bits >= $bits          ## if $max_bits_is_macro
+   case ${{ $bits/8 }}: {
+         $word_t *rbhash= ($word_t*) rbhash;
+         node= rbhash[ path->refs[idx] ] >> 1;
+         while (node && (cmp= compare_fn(compare_data, node))) {
+            ref= (node<<1) | (cmp < 0? 0 : 1);
+            ++idx;
+            $assert(idx < lim);
+            path->refs[idx]= ref;
+            node= rbhash[ref] >> 1;
+         }
+      }
+      break;
+#endif                          ## if $max_bits_is_macro
+## }
+   default:
+      /* invalid wordsize */
+      $assert(0);
+      return 0;
+   }
+   path->len= idx + 1;
+   return node;
+}
+
+## section PUBLIC;
+/* Insert a node_id at the end of a path which points to the Sentinel.
+ * The final ref will be updated to point to node_id, and then the tree
+ * will be balanced according to the Red/Black algorithm.  The path is
+ * destroyed in the process and should not be used after this call.
+ * (the path could be updated during balance rotations, but would add
+ *  overhead and users are unlikely to need it afterward anyway)
+ *
+ * Returns the node_id on success, or 0 on an assertion failure if you
+ * disabled assertions.
+ */
+extern size_t ${namespace}_insert(${namespace}_path *path, size_t node);
+
+## section PRIVATE;
+## for my $bits (@bits) {
+#if $max_bits >= $bits          ## if $max_bits_is_macro
+static size_t ${namespace}_insert_$bits(${namespace}_path *path, size_t node_id);
+#endif                          ## if $max_bits_is_macro
+## }
+
+/* Add a node_id at the end of 'path', and balance the tree if needed */
+size_t ${namespace}_insert(${namespace}_path *path, size_t node) {
+   switch (path->wordsize) {
+## for my $bits (@bits) {
+#if $max_bits >= $bits          ## if $max_bits_is_macro
+   case ${{ $bits/8 }}: return ${namespace}_insert_$bits(path, node);
+#endif                          ## if $max_bits_is_macro
+## }
+   default:
+      /* invalid wordsize */
+      $assert(0);
+   }
+   return 0;
+}
+
+/* Insert a node_id at the end of a path which points to the Sentinel.
+ * The final ref will be updated to point to node_id, and then the tree
+ * will be balanced according to the Red/Black algorithm.  The path is
+ * destroyed in the process and should not be used after this call.
+ * (the path could be updated during balance rotations, but would add
+ *  overhead and users are unlikely to need it afterward anyway)
+ *
+ * Returns the node_id on success, or 0 on an assertion failure if you
+ * disabled assertions.
+ */
+## for my $bits (@bits) {
+##   my $word_t= word_type($bits);
+size_t ${namespace}_insert_$bits(${namespace}_path *path, size_t node_id) {
+   $word_t *rbhash= (*$word_t) path->rbhash;
+   int p_i= path->len - 1;
+   /*
+   Legend for deciphering crazy bitwise operations below:
+     X_ref            - the index within the rbhash array which holds X
+     X= rbhash[X_ref] - an integer of ((node_id << 1) | red)
+   i.e. if pos is like a pointer with embedded color information,
+   pos_ref is like a pointer to that pointer.
+     X & 1            - 1 = red, 0 = black
+     X >> 1           - the node_id X is pointing to
+   If X_ref is from a tree node (true for all path->refs[i > 0]) then
+   the location of the ref also indicates which node it belongs to,
+   by virtue of nodes being located at rbhash[node_id*2].
+     X_ref >> 1       - the node_id of the parent of X
+     X_ref & 1        - true if X is the right-subtree of its parent
+     X_ref ^ 1        - a ref to the sibling of X
+     X | 1            - the ref to X's node_id's right subtree
+     X >> 1 << 1      - the ref to X's node_id's left subtree
+     (X|1) ^ 1        - same, maybe optimized if (X|1) is already in a register
+     X ^ 1            - a shortcut for one of the above when the color is known
+   */
+   // Empty paths or paths ending with a non-Sentinel reference are invalid.
+   $assert(path->wordsize == ${{ $bits/8 }} && 0 < path->len && path->len <= path->lim);
+   $assert(rbhash[path->refs[p_i]] == 0);
+   // Add new_node to the final parent-ref of the path.
+   // If p_i is 0, this will be altering the hash bucket.
+   rbhash[path->refs[p_i--]]= (node_id << 1) | 1; // and make it red
+   // 'pos' will be the parent node of that.
+   while (p_i > 0) {
+      $word_t pos_ref= path->refs[p_i--];
+      $word_t pos= rbhash[pos_ref];
+      $word_t parent_ref= path->refs[p_i];
+      // if current is a black node, no rotations needed
+      if (!(pos & 1))
+         break;
+      // pos is red, its new child is red, and parent will be black.
+      // if the sibling is also red, we can pull down the color black from the parent
+      // if not, need a rotation.
+      if (!(rbhash[pos_ref^1]&1)) {
+         // Sibling is black, need a rotation
+         // if the imbalanced child (red node) is on the same side as the parent,
+         //  need to rotate those lower nodes to the opposite side in preparation
+         //  for the rotation.
+         // e.g. if pos_ref is leftward (even) and pos's rightward child (odd) is the red one...
+         $word_t child_ref= pos ^ (pos_ref&1);
+         $word_t child= rbhash[child_ref];
+         if (child&1) {
+            // rotate pos toward [side] so parent's [side] now points to pos's [otherside]
+            // set pos's child-ref to child's [otherside] ref
+            $word_t near_grandchild_ref= child ^ (child_ref&1);
+            rbhash[child_ref]= rbhash[near_grandchild_ref];
+            // set child's [side] to pos
+            rbhash[near_grandchild_ref]= pos;
+            pos= child; // keep pos as a red node, soon to become black
+            rbhash[pos_ref]= child;
+            // parent's [side] has not been updated here, but is about to become 'child'
+            child_ref= near_grandchild_ref^1;
+            child= rbhash[child_ref];
+         }
+         // Now we can rotate toward parent to balance the tree.
+         rbhash[pos_ref]= child;
+         rbhash[child_ref]= pos_ref|1; // = parent, colored red.  simplification of ((pos_ref>>1)<<1)|1
+         rbhash[parent_ref]= pos^1; // also make pos black
+         // rotation finished, exit.
+         break;
+      }
+      rbhash[pos_ref^1] ^= 1;     // toggle color of sibling
+      rbhash[pos_ref]= pos^1;     // toggle color of pos
+      rbhash[parent_ref] ^= 1;    // toggle color of parent
+      // Now pos is black.
+      // Jump twice up the tree so that once again, pos has one red child.
+      p_i--;
+   }
+   // Root of tree is always black
+   if (rbhash[path->refs[0]] & 1)
+      rbhash[path->refs[0]] ^= 1;
+   #if !${NAMESPACE}_RUN_WITH_SCISSORS
+   // Path is no longer valid, because rotations may have destroyed it.
+   path->len= 0;
+   #endif
+   return node_id;
+}
+## }
+
+/* Delete a node at the end of a path.  The path must end with a non-Sentinel
+ * reference, and must also be allocated to the maximum height of the tree,
+ * because the node you want to delete might need to be replaced by a node
+ * deeper in the tree.  The tree will be re-balanced using the Red/Black
+ * algorithm.
+ *
+ * The path is destroyed in the process, as rotations and node-replacement
+ * occur.  You may not use the path afterward, even if the function fails.
+ * (the path could be updated during balance rotations, but would add
+ *  overhead and users are unlikely to need it afterward anyway)
+ *
+ * Returns the deleted node_id on success, or 0 on an assertion failure if
+ * you disabled assertions.
+ */
+extern size_t ${namespace}_delete(${namespace}_path *path);
+
+## section PRIVATE;
+## for my $bits (@bits) {
+#if $max_bits >= $bits          ## if $max_bits_is_macro
+static size_t ${namespace}_delete_$bits(${namespace}_path *path);
+#endif                          ## if $max_bits_is_macro
+## }
+
+/* Add a node_id at the end of 'path', and balance the tree if needed */
+size_t ${namespace}_insert(${namespace}_path *path) {
+   switch (path->wordsize) {
+## for my $bits (@bits) {
+#if $max_bits >= $bits          ## if $max_bits_is_macro
+   case ${{ $bits/8 }}: return ${namespace}_insert_$bits(path);
+#endif                          ## if $max_bits_is_macro
+## }
+   default:
+      /* invalid wordsize */
+      $assert(0);
+   }
+   return 0;
+}
+
+/* Delete a node at the end of a path.  The path must end with a non-Sentinel
+ * reference, and must also be allocated to the maximum height of the tree,
+ * because the node you want to delete might need to be replaced by a node
+ * deeper in the tree.  The tree will be re-balanced using the Red/Black
+ * algorithm.  If this is the last node in the tree, it clears the hash bucket.
+ *
+ * The path is destroyed in the process, as rotations and node-replacement
+ * occur.  You may not use the path afterward, even if the function fails.
+ * (the path could be updated during balance rotations, but would add
+ *  overhead and users are unlikely to need it afterward anyway)
+ *
+ * Returns the deleted node_id on success, or 0 on an assertion failure if
+ * you disabled assertions.
+ */
+## for my $bits (@bits) {
+##   my $word_t= word_type($bits);
+##   my $nodeint_t= $bits < 64? 'uint'.($bits*2).'_t' : undef;
+##   my sub clear_lsb($expr) { $expr= "($expr)" if $expr =~ /\W/; "($expr >> 1 << 1)" }
+extern size_t ${namespace}_delete_$bits(${namespace}_path *path) {
+   // See ${namespace}_path_insert for the notes on the bitwise operations
+   $word_t pos, ch1, ch2, sibling;
+   int p_i= path->len-1, p_lim= path->lim;
+   size_t *parent_refs= path->refs, ref, pos_ref;
+   // Path should be at least 1 element (the bucket root ref)
+   $assert(path->len >= 1);
+   // Read the final ref to find 'pos_ref' and 'pos'
+   pos_ref= parent_refs[p_i];
+   pos= rbhash[pos_ref];
+   // Path must point to a non-sentinel node
+   $assert(pos != 0);
+   // If pos has children, find a leaf to swap with.
+   // Then delete this node in the leaf's position.
+   // Note that normal red/black would delete the element first, then swap, but if we do that
+   // a rotation could change the path->refs putting the node-to-delete somwhere else.
+   ch1= rbhash[pos], ch2= rbhash[pos ^ 1];
+   if (ch1 || ch2) {
+      if (ch1 && ch2) {
+         int orig_p_i= p_i;
+         $word_t alt= pos, alt2;
+         // Descend one level to the left.
+         // The path should always have room for this additional reference if it
+         // was allocated to max-tree-height and the tree is actually balanced.
+         ++p_i;
+         $assert(p_i < p_lim);
+         parent_refs[p_i]= ref= ${{ clear_lsb('pos') }}; // go left;
+         alt= rbhash[ref]; // either ch1 or ch2, but now we know it's the left one
+         // descend as many levels as possible to the right
+         while ((alt= rbhash[ref= alt | 1])) {
+            ++p_i;
+            $assert(p_i < p_lim);
+            parent_refs[p_i]= ref;
+         }
+         // 'alt' is the node we swap with.
+         alt= rbhash[parent_refs[p_i]];
+         // is there one to the left?
+         if ((alt2= rbhash[${{ clear_lsb('alt') }}])) {
+            $assert(alt2 & 1);
+            // it is required to be a red leaf, so replace alt with it
+            rbhash[parent_refs[p_i]]= alt2 ^ 1;
+##          if ($nodeint_t) {
+            (($nodeint_t *)rbhash)[alt2 >> 1]= 0;
+            // Now substitute this for pos and we're done.
+            (($nodeint_t *)rbhash)[alt >> 1]= (($nodeint_t *)rbhash)[pos >> 1];
+##          } else {
+            rbhash[alt2]= 0;
+            rbhash[alt2 ^ 1]= 0;
+            // Now substitute this for pos and we're done.
+            rbhash[alt | 1]= rbhash[pos | 1];
+            rbhash[(alt | 1) ^ 1]= rbhash[(pos | 1) ^ 1];
+##          }
+            rbhash[pos_ref]= ${{ clear_lsb('alt') }} | (pos & 1); // preserve color of pos
+            goto done;
+         }
+         else {
+            // swap colors of alt and pos
+            alt ^= pos & 1;
+            pos ^= alt & 1;
+            alt ^= pos & 1;
+##          if ($nodeint_t) {
+            (($nodeint_t *)rbhash)[alt >> 1]= (($nodeint_t *)rbhash)[pos >> 1];
+##          } else {
+            rbhash[alt | 1]= rbhash[pos | 1];             // copy right
+            rbhash[(alt | 1) ^ 1]= rbhash[(pos | 1) ^ 1]; // copy left
+##          }
+            rbhash[pos_ref]= alt;
+            // the parent ref at orig_p_i+1 just changed address, so update that
+            // (and this affects the next line if alt was a child of pos)
+            parent_refs[orig_p_i + 1]= ${{ clear_lsb('alt') }}; // was left branch at that point
+            pos_ref= parent_refs[p_i];
+         }  
+      }
+      else {
+         // Node is black with one child.  Swap with it.
+         rbhash[pos_ref]= ${{ clear_lsb('ch1 | ch2') }}; // and make it black
+         goto done;
+      }
+   }
+   // Remove it.
+   rbhash[pos_ref]= 0;
+   // It was a black node with no children.  Now it gets interesting.
+   if (!(pos & 1)) {
+      // The tree must have the same number of black nodes along any path from root
+      // to leaf.  We want to remove a black node, disrupting the number of black
+      // nodes along the path from the root to the current leaf.  To correct this,
+      // we must either reduce all other paths, or add a black node to the current
+      // path.
+      // Loop until the current node is red, or until we get to the root node.
+      sibling= rbhash[pos_ref ^ 1];
+      --p_i; // p_i is now the index of the ref to the parent
+      while (p_i >= 0) {
+         size_t near_nephew_ref;
+         $word_t near_nephew;
+         // If the sibling is red, we are unable to reduce the number of black
+         //  nodes in the sibling tree, and we can't increase the number of black
+         //  nodes in our tree..  Thus we must do a rotation from the sibling
+         //  tree to our tree to give us some extra (red) nodes to play with.
+         // This is Case 1 from the text
+         if (sibling & 1) {
+            // Node is black and sibling is red. Get ref to sibling's near subtree
+            near_nephew_ref= (sibling ^ 1) | (pos_ref & 1);
+            // sibling is new parent, and now black.
+            rbhash[parent_refs[p_i]]= sibling ^ 1;
+            // move sibling's child under parent, becoming new sibling (which is black)
+            sibling= rbhash[near_nephew_ref];
+            rbhash[pos_ref ^ 1]= sibling;
+            rbhash[near_nephew_ref]= pos_ref | 1; // former sibling sameside tree = parent, now red
+            ++p_i;
+            $assert(p_i < p_lim);
+            parent_refs[p_i] = near_nephew_ref; // insert new parent into list
+         }
+         // sibling will be black here
+
+         // If the sibling is black and both children are black, we have to
+         //  reduce the black node count in the sibling's tree to match ours.
+         // This is Case 2a from the text.
+         near_nephew_ref= sibling | (pos_ref & 1);
+         near_nephew= rbhash[near_nephew_ref];
+         if (!((near_nephew|rbhash[near_nephew_ref ^ 1]) & 1)) {
+            $assert(sibling > 1);
+            rbhash[pos_ref ^ 1] |= 1; // change sibling to red
+            // Now we move one level up the tree to continue fixing the other branches
+            if (p_i < 1)
+               break;
+            pos_ref= parent_refs[p_i--];
+            if (rbhash[pos_ref] & 1) {
+               // Now, make the current node black (to fulfill Case 2b)
+               rbhash[pos_ref] ^= 1;
+               break;
+            }
+            sibling= rbhash[pos_ref ^ 1];
+         }
+         else {
+            // sibling will be black with 1 or 2 red children here
+
+            // If one of the sibling's children are red, we again can't make the
+            //  sibling red to balance the tree at the parent, so we have to do a
+            //  rotation.  If the "near" nephew is red and the "far" nephew is
+            //  black, we need to rotate that tree away before rotating the
+            //  parent toward.
+            // After doing a rotation and rearranging a few colors, the effect is
+            //  that we maintain the same number of black nodes per path on the far
+            //  side of the parent, and we gain a black node on the current side,
+            //  so we are done.
+            if (near_nephew & 1) {
+               // Case 3 from the text, double rotation
+               size_t tmp_ref= near_nephew ^ (pos_ref & 1); // near nephew's far child
+               rbhash[near_nephew_ref]= rbhash[tmp_ref];
+               rbhash[pos_ref ^ 1]= near_nephew;
+               rbhash[tmp_ref]= sibling;
+               sibling= near_nephew ^ 1; // make it black
+               near_nephew_ref= sibling | (pos_ref & 1);
+            }
+            else
+               rbhash[near_nephew_ref ^ 1] ^= 1; // far nephew becomes black
+            // now Case 4 from the text
+            $assert(sibling > 1);
+            rbhash[pos_ref ^ 1]= rbhash[near_nephew_ref];
+            // parent becomes black, balancing current path
+            rbhash[near_nephew_ref]= ${{ clear_lsb('pos_ref') }};
+            // Sibling assumes parent's color and position
+            rbhash[parent_refs[p_i]]= sibling | (rbhash[parent_refs[p_i]] & 1);
+            break;
+         }
+      }
+   }
+   done:
+   // Ensure root-ref is black
+   if (rbhash[parent_refs[0]] & 1)
+      rbhash[parent_refs[0]] ^= 1;
+   // clean the 'pos' node for future use
+##   if ($nodeint_t) {
+   (($nodeint_t *)rbhash)[pos >> 1]= 0;
+##   } else {
+   rbhash[pos]= 0;
+   rbhash[pos ^ 1]= 0;
+##   }
+   #if !${NAMESPACE}_RUN_WITH_SCISSORS
+   // Path is no longer valid, because rotations may have destroyed it.
+   path->len= 0;
+   #endif
+   return pos >> 1;
+}
+## }
 
 ## # Define a search API for a custom comparison function
 ## # Parameters:
@@ -207,43 +901,6 @@ size_t ${search_ns}_find(
    else {
       $assert(capacity <= ${NAMESPACE}_MAX_ELEMENTS_$max_bits);
    }
-   return node_id;
-}
-
-/* Find a node in the hash table, and record the path to arrive at the node
- * or the node pointer where it would exist.  The path can be used for
- * inserting or deleting without re-comparing any elements.
- *
- * The path should already have been initialized using `${namespace}_path_init`.
- */
-size_t ${search_ns}_find_path(
-   void *rbhash, size_t capacity, ${namespace}_path *path, size_t bucket_idx,
-   @search_args
-) {
-   size_t ref, node_id= 0;
-   int cmp, p_i= 0, p_lim= path->lim;
-   path->len= 0; // in case $assert calls 'return 0'
-   $assert(p_lim > 0);
-## for my $bits (@bits) {
-##   my $word_t= word_type($bits);
-##   my $else= $bits > $min_bits? ' else':'';
-  $else if (capacity <= ${NAMESPACE}_MAX_ELEMENTS_$bits) {
-      $word_t *rbhash_w= ($word_t*) rbhash;
-      path->refs[0]= ${NAMESPACE}_TABLE_WORD_OFS(capacity) + bucket_idx;
-      node_id= rbhash_w[ path->refs[0] ] >> 1;
-      while (node_id && (cmp= $search_cmp)) {
-         ref= (node_id<<1) | (cmp < 0? 0 : 1);
-         ++p_i;
-         $assert(p_i < p_lim);
-         path->refs[p_i]= ref;
-         node_id= rbhash_w[ref] >> 1;
-      }
-   }
-## }
-   else {
-      $assert(capacity <= ${NAMESPACE}_MAX_ELEMENTS_$max_bits);
-   }
-   path->len= p_i+1;
    return node_id;
 }
 
@@ -342,369 +999,43 @@ extern size_t ${search_ns}_delete(
 ##    section $orig_section;
 ## } # end define_search_api
 ##
-## section PRIVATE;
-
-/* Only called when capacity is out of bounds. Used by the inline bit-selectors. */
-extern size_t ${namespace}_capacity_bounds_assertion(size_t capacity) {
-   $assert(capacity <= ${NAMESPACE}_MAX_ELEMENTS_$max_bits);
-   return 0;
-}
-
 ## define_search_api(
 ##    api_args => \@default_search_args,
 ##    cmp      => $default_search_cmp,
 ## );
 
-/* Given a path to a node, make that path point to a new node assuming that
- * the new node contains the same search key that the old node used to.
- * This is used when moving array elements to a new index where the NodeID
- * would be different.
+/* Find a node in the hash table, and record the path to arrive at the node
+ * or the node pointer where it would exist.  The path can be used for
+ * inserting or deleting without re-comparing any elements.
  *
- * This is a O(1) operation, though building the path probably took O(log N).
- *
- * Returns the NodeID that the path previously ended with, and the path has
- * been modified to end with new_node_id and is still valid.  May return
- * 0 if an assertion fails and you have disabled assertions.
+ * The path should already have been initialized using `${namespace}_path_init`.
  */
-extern size_t ${namespace}_path_swap(
-   void *rbhash, size_t capacity, ${namespace}_path *path, size_t new_node_id
-) {
-   size_t ref;
-   /* path must point to a node, and new_node_id must not be the sentinel */
-   $assert(path->len > 0 && new_node_id);
+size_t ${search_ns}_find_path(${namespace}_path *path, @search_args) {
+   size_t ref, node_id= 0;
+   int cmp, p_i= 0, p_lim= path->lim;
+   $assert(p_lim > 0);
 ## for my $bits (@bits) {
-##    my $word_t= word_type($bits);
-##    my $nodeint_t= $bits < 64? 'uint'.($bits*2).'_t' : undef;
-##    my $else= $bits > $min_bits? ' else':'';
+##   my $word_t= word_type($bits);
+##   my $else= $bits > $min_bits? ' else':'';
   $else if (capacity <= ${NAMESPACE}_MAX_ELEMENTS_$bits) {
-      $word_t *rbhash_w= ($word_t*) rbhash, prev;
-      // It is an error if new_node_id is not already zeroed
-##    if ($nodeint_t) {
-      $assert((($nodeint_t*) rbhash)[new_node_id] == 0);
-##    } else {
-      $assert(rbhash_w[new_node_id << 1] == 0 && rbhash_w[(new_node_id << 1)|1] == 0);
-##    }
-      // Swap the references
-      ref= path->refs[path->len-1];
-      prev= rbhash_w[ref];
-      rbhash_w[ref]= (new_node_id << 1) | (prev&1);
-##    if ($nodeint_t) {
-      (($nodeint_t*) rbhash)[new_node_id]= (($nodeint_t*) rbhash)[prev>>1];
-      // and clear out the 'prev' before returning it
-      (($nodeint_t*) rbhash)[prev>>1]= 0;
-##    } else {
-      rbhash_w[new_node_id << 1]= rbhash_w[prev >> 1 << 1];
-      rbhash_w[(new_node_id << 1) | 1]= rbhash_w[prev|1];
-      // and clear out the 'prev' before returning it
-      rbhash_w[prev >> 1 << 1]= 0;
-      rbhash_w[prev|1]= 0;
-##    }
-      return prev >> 1;
-   }
-## }
-   $assert(capacity <= ${NAMESPACE}_MAX_ELEMENTS_${max_bits});
-   return 0;
-}
-
-/* Insert a node_id at the end of a path which points to the Sentinel.
- * The final ref will be updated to point to node_id, and then the tree
- * will be balanced according to the Red/Black algorithm.  The path is
- * destroyed in the process and should not be used after this call.
- * (the path could be updated during balance rotations, but would add
- *  overhead and users are unlikely to need it afterward anyway)
- *
- * Returns the node_id on success, or 0 on an assertion failure if you
- * disabled assertions.
- */
-## for my $bits (@bits) {
-##   my $word_t= word_type($bits);
-extern size_t ${namespace}_path_insert_$bits(
-   $word_t *rbhash, ${namespace}_path *path, size_t node_id
-) {
-   /*
-   Legend for deciphering crazy bitwise operations below:
-     X_ref            - the index within the rbhash array which holds X
-     X= rbhash[X_ref] - an integer of ((node_id << 1) | red)
-   i.e. if pos is like a pointer with embedded color information,
-   pos_ref is like a pointer to that pointer.
-     X & 1            - 1 = red, 0 = black
-     X >> 1           - the node_id X is pointing to
-   If X_ref is from a tree node (true for all path->refs[i > 0]) then
-   the location of the ref also indicates which node it belongs to,
-   by virtue of nodes being located at rbhash[node_id*2].
-     X_ref >> 1       - the node_id of the parent of X
-     X_ref & 1        - true if X is the right-subtree of its parent
-     X_ref ^ 1        - a ref to the sibling of X
-     X | 1            - the ref to X's node_id's right subtree
-     X >> 1 << 1      - the ref to X's node_id's left subtree
-     (X|1) ^ 1        - same, maybe optimized if (X|1) is already in a register
-     X ^ 1            - a shortcut for one of the above when the color is known
-   */
-   int p_i= path->len - 1;
-   // Empty paths or paths ending with a non-Sentinel reference are invalid.
-   $assert(path->len > 0 && rbhash[path->refs[p_i]] == 0);
-   // Add new_node to the final parent-ref of the path.
-   // If p_i is 0, this will be altering the hash bucket.
-   rbhash[path->refs[p_i--]]= (node_id << 1) | 1; // and make it red
-   // 'pos' will be the parent node of that.
-   while (p_i > 0) {
-      $word_t pos_ref= path->refs[p_i--];
-      $word_t pos= rbhash[pos_ref];
-      $word_t parent_ref= path->refs[p_i];
-      // if current is a black node, no rotations needed
-      if (!(pos & 1))
-         break;
-      // pos is red, its new child is red, and parent will be black.
-      // if the sibling is also red, we can pull down the color black from the parent
-      // if not, need a rotation.
-      if (!(rbhash[pos_ref^1]&1)) {
-         // Sibling is black, need a rotation
-         // if the imbalanced child (red node) is on the same side as the parent,
-         //  need to rotate those lower nodes to the opposite side in preparation
-         //  for the rotation.
-         // e.g. if pos_ref is leftward (even) and pos's rightward child (odd) is the red one...
-         $word_t child_ref= pos ^ (pos_ref&1);
-         $word_t child= rbhash[child_ref];
-         if (child&1) {
-            // rotate pos toward [side] so parent's [side] now points to pos's [otherside]
-            // set pos's child-ref to child's [otherside] ref
-            $word_t near_grandchild_ref= child ^ (child_ref&1);
-            rbhash[child_ref]= rbhash[near_grandchild_ref];
-            // set child's [side] to pos
-            rbhash[near_grandchild_ref]= pos;
-            pos= child; // keep pos as a red node, soon to become black
-            rbhash[pos_ref]= child;
-            // parent's [side] has not been updated here, but is about to become 'child'
-            child_ref= near_grandchild_ref^1;
-            child= rbhash[child_ref];
-         }
-         // Now we can rotate toward parent to balance the tree.
-         rbhash[pos_ref]= child;
-         rbhash[child_ref]= pos_ref|1; // = parent, colored red.  simplification of ((pos_ref>>1)<<1)|1
-         rbhash[parent_ref]= pos^1; // also make pos black
-         // rotation finished, exit.
-         break;
-      }
-      rbhash[pos_ref^1] ^= 1;     // toggle color of sibling
-      rbhash[pos_ref]= pos^1;     // toggle color of pos
-      rbhash[parent_ref] ^= 1;    // toggle color of parent
-      // Now pos is black.
-      // Jump twice up the tree so that once again, pos has one red child.
-      p_i--;
-   }
-   // Root of tree is always black
-   if (rbhash[path->refs[0]] & 1)
-      rbhash[path->refs[0]] ^= 1;
-   #if !${NAMESPACE}_RUN_WITH_SCISSORS
-   // Path is no longer valid, because rotations may have destroyed it.
-   path->len= 0;
-   #endif
-   return node_id;
-}
-## }
-
-/* Delete a node at the end of a path.  The path must end with a non-Sentinel
- * reference, and must also be allocated to the maximum height of the tree,
- * because the node you want to delete might need to be replaced by a node
- * deeper in the tree.  The tree will be re-balanced using the Red/Black
- * algorithm.  If this is the last node in the tree, it clears the hash bucket.
- *
- * The path is destroyed in the process, as rotations and node-replacement
- * occur.  You may not use the path afterward, even if the function fails.
- * (the path could be updated during balance rotations, but would add
- *  overhead and users are unlikely to need it afterward anyway)
- *
- * Returns the deleted node_id on success, or 0 on an assertion failure if
- * you disabled assertions.
- */
-## for my $bits (@bits) {
-##   my $word_t= word_type($bits);
-##   my $nodeint_t= $bits < 64? 'uint'.($bits*2).'_t' : undef;
-extern size_t ${namespace}_path_delete_$bits($word_t *rbhash, ${namespace}_path *path) {
-   // See ${namespace}_path_insert for the notes on the bitwise operations
-   $word_t pos, ch1, ch2, sibling;
-   int p_i= path->len-1, p_lim= path->lim;
-   size_t *parent_refs= path->refs, ref, pos_ref;
-   // Path should be at least 1 element (the bucket root ref)
-   $assert(path->len >= 1);
-   // Read the final ref to find 'pos_ref' and 'pos'
-   pos_ref= parent_refs[p_i];
-   pos= rbhash[pos_ref];
-   // Path must point to a non-sentinel node
-   $assert(pos != 0);
-   // If pos has children, find a leaf to swap with.
-   // Then delete this node in the leaf's position.
-   // Note that normal red/black would delete the element first, then swap, but if we do that
-   // a rotation could change the path->refs putting the node-to-delete somwhere else.
-   ch1= rbhash[pos], ch2= rbhash[pos ^ 1];
-   if (ch1 || ch2) {
-      if (ch1 && ch2) {
-         int orig_p_i= p_i;
-         $word_t alt= pos, alt2;
-         // Descend one level to the left.
-         // The path should always have room for this additional reference if it
-         // was allocated to max-tree-height and the tree is actually balanced.
+      $word_t *rbhash_w= ($word_t*) rbhash;
+      path->refs[0]= ${NAMESPACE}_TABLE_WORD_OFS(capacity) + bucket_idx;
+      node_id= rbhash_w[ path->refs[0] ] >> 1;
+      while (node_id && (cmp= $search_cmp)) {
+         ref= (node_id<<1) | (cmp < 0? 0 : 1);
          ++p_i;
          $assert(p_i < p_lim);
-         parent_refs[p_i]= ref= (pos >> 1 << 1); // go left;
-         alt= rbhash[ref]; // either ch1 or ch2, but now we know it's the left one
-         // descend as many levels as possible to the right
-         while ((alt= rbhash[ref= alt | 1])) {
-            ++p_i;
-            $assert(p_i < p_lim);
-            parent_refs[p_i]= ref;
-         }
-         // 'alt' is the node we swap with.
-         alt= rbhash[parent_refs[p_i]];
-         // is there one to the left?
-         if ((alt2= rbhash[alt >> 1 << 1])) {
-            $assert(alt2 & 1);
-            // it is required to be a red leaf, so replace alt with it
-            rbhash[parent_refs[p_i]]= alt2 ^ 1;
-##          if ($nodeint_t) {
-            (($nodeint_t *)rbhash)[alt2 >> 1]= 0;
-            // Now substitute this for pos and we're done.
-            (($nodeint_t *)rbhash)[alt >> 1]= (($nodeint_t *)rbhash)[pos >> 1];
-##          } else {
-            rbhash[alt2]= 0;
-            rbhash[alt2 ^ 1]= 0;
-            // Now substitute this for pos and we're done.
-            rbhash[alt | 1]= rbhash[pos | 1];
-            rbhash[(alt | 1) ^ 1]= rbhash[(pos | 1) ^ 1];
-##          }
-            rbhash[pos_ref]= (alt >> 1 << 1) | (pos & 1); // preserve color of pos
-            goto done;
-         }
-         else {
-            // swap colors of alt and pos
-            alt ^= pos & 1;
-            pos ^= alt & 1;
-            alt ^= pos & 1;
-##          if ($nodeint_t) {
-            (($nodeint_t *)rbhash)[alt >> 1]= (($nodeint_t *)rbhash)[pos >> 1];
-##          } else {
-            rbhash[alt | 1]= rbhash[pos | 1];             // copy right
-            rbhash[(alt | 1) ^ 1]= rbhash[(pos | 1) ^ 1]; // copy left
-##          }
-            rbhash[pos_ref]= alt;
-            // the parent ref at orig_p_i+1 just changed address, so update that
-            // (and this affects the next line if alt was a child of pos)
-            parent_refs[orig_p_i + 1]= alt >> 1 << 1; // was left branch at that point
-            pos_ref= parent_refs[p_i];
-         }  
-      }
-      else {
-         // Node is black with one child.  Swap with it.
-         rbhash[pos_ref]= (ch1 | ch2) >> 1 << 1; // and make it black
-         goto done;
+         path->refs[p_i]= ref;
+         node_id= rbhash_w[ref] >> 1;
       }
    }
-   // Remove it.
-   rbhash[pos_ref]= 0;
-   // It was a black node with no children.  Now it gets interesting.
-   if (!(pos & 1)) {
-      // The tree must have the same number of black nodes along any path from root
-      // to leaf.  We want to remove a black node, disrupting the number of black
-      // nodes along the path from the root to the current leaf.  To correct this,
-      // we must either reduce all other paths, or add a black node to the current
-      // path.
-      // Loop until the current node is red, or until we get to the root node.
-      sibling= rbhash[pos_ref ^ 1];
-      --p_i; // p_i is now the index of the ref to the parent
-      while (p_i >= 0) {
-         size_t near_nephew_ref;
-         $word_t near_nephew;
-         // If the sibling is red, we are unable to reduce the number of black
-         //  nodes in the sibling tree, and we can't increase the number of black
-         //  nodes in our tree..  Thus we must do a rotation from the sibling
-         //  tree to our tree to give us some extra (red) nodes to play with.
-         // This is Case 1 from the text
-         if (sibling & 1) {
-            // Node is black and sibling is red. Get ref to sibling's near subtree
-            near_nephew_ref= (sibling ^ 1) | (pos_ref & 1);
-            // sibling is new parent, and now black.
-            rbhash[parent_refs[p_i]]= sibling ^ 1;
-            // move sibling's child under parent, becoming new sibling (which is black)
-            sibling= rbhash[near_nephew_ref];
-            rbhash[pos_ref ^ 1]= sibling;
-            rbhash[near_nephew_ref]= pos_ref | 1; // former sibling sameside tree = parent, now red
-            ++p_i;
-            $assert(p_i < p_lim);
-            parent_refs[p_i] = near_nephew_ref; // insert new parent into list
-         }
-         // sibling will be black here
-
-         // If the sibling is black and both children are black, we have to
-         //  reduce the black node count in the sibling's tree to match ours.
-         // This is Case 2a from the text.
-         near_nephew_ref= sibling | (pos_ref & 1);
-         near_nephew= rbhash[near_nephew_ref];
-         if (!((near_nephew|rbhash[near_nephew_ref ^ 1]) & 1)) {
-            $assert(sibling > 1);
-            rbhash[pos_ref ^ 1] |= 1; // change sibling to red
-            // Now we move one level up the tree to continue fixing the other branches
-            if (p_i < 1)
-               break;
-            pos_ref= parent_refs[p_i--];
-            if (rbhash[pos_ref] & 1) {
-               // Now, make the current node black (to fulfill Case 2b)
-               rbhash[pos_ref] ^= 1;
-               break;
-            }
-            sibling= rbhash[pos_ref ^ 1];
-         }
-         else {
-            // sibling will be black with 1 or 2 red children here
-
-            // If one of the sibling's children are red, we again can't make the
-            //  sibling red to balance the tree at the parent, so we have to do a
-            //  rotation.  If the "near" nephew is red and the "far" nephew is
-            //  black, we need to rotate that tree away before rotating the
-            //  parent toward.
-            // After doing a rotation and rearranging a few colors, the effect is
-            //  that we maintain the same number of black nodes per path on the far
-            //  side of the parent, and we gain a black node on the current side,
-            //  so we are done.
-            if (near_nephew & 1) {
-               // Case 3 from the text, double rotation
-               size_t tmp_ref= near_nephew ^ (pos_ref & 1); // near nephew's far child
-               rbhash[near_nephew_ref]= rbhash[tmp_ref];
-               rbhash[pos_ref ^ 1]= near_nephew;
-               rbhash[tmp_ref]= sibling;
-               sibling= near_nephew ^ 1; // make it black
-               near_nephew_ref= sibling | (pos_ref & 1);
-            }
-            else
-               rbhash[near_nephew_ref ^ 1] ^= 1; // far nephew becomes black
-            // now Case 4 from the text
-            assert(sibling > 1);
-            rbhash[pos_ref ^ 1]= rbhash[near_nephew_ref];
-            // parent becomes black, balancing current path
-            rbhash[near_nephew_ref]= pos_ref >> 1 << 1; 
-            // Sibling assumes parent's color and position
-            rbhash[parent_refs[p_i]]= sibling | (rbhash[parent_refs[p_i]] & 1);
-            break;
-         }
-      }
-   }
-   done:
-   // Ensure root-ref is black
-   if (rbhash[parent_refs[0]] & 1)
-      rbhash[parent_refs[0]] ^= 1;
-   // clean the 'pos' node for future use
-##   if ($nodeint_t) {
-   (($nodeint_t *)rbhash)[pos >> 1]= 0;
-##   } else {
-   rbhash[pos]= 0;
-   rbhash[pos ^ 1]= 0;
-##   }
-   #if !${NAMESPACE}_RUN_WITH_SCISSORS
-   // Path is no longer valid, because rotations may have destroyed it.
-   path->len= 0;
-   #endif
-   return pos >> 1;
-}
 ## }
+   else {
+      $assert(capacity <= ${NAMESPACE}_MAX_ELEMENTS_$max_bits);
+   }
+   path->len= p_i+1;
+   return node_id;
+}
 
 ## if ($feature_print) {
 ##   section PUBLIC;
