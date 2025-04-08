@@ -20,8 +20,6 @@ Then, to adapt to your data type, you can call make_search_api again as many tim
 ## param $namespace = 'rbhash';
 ## param $min_bits  = 8;
 ## param $max_bits  = 64;
-## param @default_search_args= ('int (*cmp_callback)(void *, size_t)', 'void *userdata');
-## param $default_search_cmp = "cmp_callback(userdata, node_id)";
 ## param @treeprint_args;
 ## param $debug= 0;
 ## param $feature_print= 1;
@@ -185,6 +183,15 @@ struct ${namespace}_path${bits} {
    uint8_t len, lim, wordsize;
    size_t refs[${NAMESPACE}_MAX_TREE_HEIGHT_${bits}];
 };
+
+/* path0 is used for measuring size of the header of a path struct */
+struct ${namespace}_path0 {
+   void *rbhash;
+   uint8_t len, lim, wordsize;
+   size_t refs[];
+};
+#define INIT_PATH_LIM(p) ((p).lim= (sizeof(p) - sizeof(struct ${namespace}_path0) / sizeof(size_t)))
+
 ## section PRIVATE;
 void ${namespace}_path${bits}_init(struct ${namespace}_path${bits} *p, void *rbh, size_t cap, size_t bucket_idx);
 ## section PUBLIC;
@@ -847,63 +854,168 @@ extern size_t ${namespace}_delete_$bits(${namespace}_path *path) {
 }
 ## }
 
-## # Define a search API for a custom comparison function
-## # Parameters:
-## #   sub_ns:   namespace component to be appended to the rbhash namespace
-## #   api_args: arrayref of C function parameters (strings) added to each search function
-## #   cmp:      a string of C that calls a function to compare node_id with the search_args
-## #   header:   if set, emits the API declarations into that named section.  default is 'public'
-## #   unit:     if set, emits the implementation into that named section. default is the current section.
-##
-## sub define_search_api(%options) {
-##    my $search_ns= $namespace;
-##    $search_ns .=  '_' . $options{sub_ns} if length($options{sub_ns}//'');
-##    my @search_args= $options{api_args} or die "'search_args' are required\n";
-##    my $search_cmp= $options{cmp} or die "'cmp' is required\n";
-##
-##    my $orig_section= $self->current_output_section;
-##    section($options{header} || PUBLIC);
-// Find a node_id matching the search criteria and fill in the 'path' to it, else return 0
-extern size_t ${search_ns}_find_path(void *rbhash, size_t capacity, ${namespace}_path *path, size_t bucket_idx, @search_args);
+=head1 METHODS
 
-// Simplified search for node_id, without building a path
-extern size_t ${search_ns}_find(void *rbhash, size_t capacity, size_t bucket_idx, @search_args);
+=head2 custom_rbhash_find_impl
 
-// Insert a node_id, unless one already matches the search criteria
-extern size_t ${search_ns}_insert(void *rbhash, size_t capacity, size_t node_id, size_t bucket_idx, @search_args);
+  int my_compare(..., size_t node_id);
+  
+  my_element* my_container_find(my_container *c, my_keytype *k) {
+    void *rbhash= ...;
+    size_t capacity= ...;
+    size_t bucket_idx= ...;
+    size_t node_id;
+    ${{ $rbhash->custom_rbhash_find_impl(
+      compare => "strcmp(k, c->elements[$node_id-1].name)",
+      path    => undef,
+    ) }}
+    return node_id? my_container_get_element(c, node_id) : NULL;
+  }
 
-// Delete a node matching the search criteria
-extern size_t ${search_ns}_delete(void *rbhash, size_t capacity, size_t bucket_idx, @search_args);
+This method declares the body of a search function, allowing you to inline your comparison
+function and possibly avoid passing lots of parameters into it, for increased speed.
+The function body requires you to declare:
 
-##    section($options{unit} || $orig_section);
+=over
 
-/* Find a node in the hash table, or tree.  Returns the node_id, or 0 if no
- * nodes match.
- *
- * This is a simplified version of find_path that doesn't keep track of the
- * path through the tree, saving time but not facilitating inserts or deletes.
- */
-size_t ${search_ns}_find(
-   void *rbhash, size_t capacity, size_t bucket_idx,
-   @search_args
-) {
-   size_t node_id= 0;
-   int cmp;
-## for my $bits (@bits) {
-##   my $word_t= word_type($bits);
-##   my $else= $bits > $min_bits? ' else':'';
-  $else if (capacity <= ${NAMESPACE}_MAX_ELEMENTS_$bits) {
-      node_id= (($word_t *)rbhash)[ ${NAMESPACE}_TABLE_WORD_OFS(capacity) + bucket_idx ] >> 1;
-      while (node_id && (cmp= $search_cmp))
-         node_id= (($word_t *)rbhash)[ (node_id<<1) | (cmp < 0? 0 : 1) ] >> 1;
+=item compare
+
+The comparison function.  This is a C expression which evaluates to an int less, equal, or
+greater than 1, in the manner of strcmp or memcmp.  You can specify it as a single string that
+uses 'node_id' (or whatever you renamed that variable to), or if you have multiple statements
+you can specify an arrayref where the final element is an expression and the others are
+statements.
+
+=item rbhash
+
+The pointer to the rbhash structure.
+
+=item capacity
+
+The capacity of the rbhash structure.
+
+=item bucket_idx
+
+The hash bucket from which to start searching.  You should run your hash function on the key
+(modulo the number of hash buckets) to calculate this.
+
+=item node_id
+
+An output variable which will hold the node ID (1-based) of the matching node, or 0 if none
+matched.
+
+=item path_var
+
+The name of the rbhash_path struct to store the tree path into.  By default, no path is
+constructed.  This is expected to be the variable of the path, not a pointer to one, so
+sizeof() works on it.  The generated code will initialize the path struct.
+
+=item path_ptr
+
+The name if a pointer to a rbhash_path struct.  The path->len element must be initialized prior
+to the generated code.
+
+=back
+
+=cut
+
+## sub custom_rbhash_find_impl(%options) {
+##    my $rbhash=     $options{rbhash} // 'rbhash';
+##    my $capacity=   $options{capacity} // 'capacity';
+##    my $bucket_idx= $options{bucket_idx} // 'bucket_idx';
+##    my $node_id=    $options{node_id} // 'node_id';
+##    my $path=       $options{path_var} // ($options{path_ptr}? "(* $options{path_ptr})" : undef);
+##    $path= "($path)" if $path =~ /\W/;
+##    my @cmp_setup=  ref $options{compare} eq 'ARRAY'? @{$options{compare}}
+##                  : $options{compare}? ( $options{compare} )
+##                  : ('compare');
+##    my $cmp_expr=   pop @cmp_setup;
+##    if ($options{path_var}) {
+   ${NAMESPACE}_INIT_PATH_LIM($path);
+##    } elsif ($options{path_ptr}) {
+   // 50% chance of catching uninitialized lim, without making too many assumptions 
+   // about how the user allocated it
+   $assert($path.lim > 0 && $path.lim <= 128);
+##    }
+   {
+      int cmp;
+      size_t ref;
+      size_t p_i, p_lim= $path.lim;     ## if $path
+##    # for user convenience, allow rbhash, capacity, and bucket_idx to be
+##    # expressions, and flatten them down to single variables so that they
+##    # only get evaluated once.
+##    if ($rbhash =~ /\W/) {
+      void *rbhash_bytes= $rbhash;
+##       $rbhash= 'rbhash_bytes';
+##    }
+##    if ($capacity =~ /\W/) {
+      size_t rbhash_capacity= $capacity;
+##       $capacity= 'rbhash_capacity';
+##    }
+##    if ($bucket_idx =~ /\W/) {
+      size_t rbhash_bucket_idx= $bucket_idx;
+##       $bucket_idx= 'rbhash_bucket_idx';
+##    }
+##    for my $bits (@bits) {
+##       my $word_t= word_type($bits);
+##       my $else= $bits > $min_bits? ' else':'';
+     #if $max_bits >= $bits             ## if $max_bits_is_macro
+     $else if ($capacity <= ${NAMESPACE}_MAX_ELEMENTS_$bits) {
+         ref= ${NAMESPACE}_TABLE_WORD_OFS($capacity) + $bucket_idx;
+##       if ($path) {
+         /* ensure path->lim appears to be initialized */
+         $path.rbhash= $rbhash;
+         $path.wordsize= ${{ $bits / 8 }};
+         $path.refs[0]= ref;
+##       }
+         $node_id= (($word_t *)$rbhash)[ref] >> 1;
+         while ($node_id) {
+            @cmp_setup;
+            if (!(cmp= ($cmp_expr)))
+               break;
+            ref= ($node_id<<1) | (cmp < 0? 0 : 1);
+##       if ($path) {
+            ++p_i;                      ## if $path
+            $assert(p_i < p_lim);       ## if $path
+            $path.refs[p_i]= ref;       ## if $path
+##       }
+            $node_id= (($word_t *)$rbhash)[ref] >> 1;
+         }
+         $path.len= p_i+1;              ## if $path
+      }
+      #endif                            ## if $max_bits_is_macro
+##    }
+      else {
+         // This is an assertion failure, but let the caller decide what to do about that.
+         $path.wordsize= 0;
+         $path.len= 0;
+         $node_id= 0;
+      }
    }
 ## }
-   else {
-      $assert(capacity <= ${NAMESPACE}_MAX_ELEMENTS_$max_bits);
-   }
-   return node_id;
-}
 
+=head2 custom_rbhash_insert_impl
+
+  int my_compare(..., size_t node_id);
+  
+  my_element* my_container_insert(my_container *c, char *k, void *v) {
+    void *rbhash= ...;
+    size_t capacity= ...;
+    size_t bucket_idx= ...;
+    size_t node_id;
+    
+    ${{ $rbhash->custom_rbhash_find_impl(
+      compare => "strcmp(k, c->elements[$node_id-1].name)",
+    ) }}
+    return node_id? my_container_get_element(c, node_id) : NULL;
+  }
+
+This method declares the body of a search function, allowing you to inline your comparison
+function and possibly avoid passing lots of parameters into it, for increased speed.
+
+=cut
+
+## sub custom_rbhash_insert_impl(%options) {
 /* Insert a node into the hashtable, storing collisions in a tree.
  * If it finds a node with same key, it returns that index and does not insert
  * the new node, else it will insert and return your 'new_node' value.
@@ -953,7 +1065,30 @@ extern size_t ${search_ns}_insert(
    $assert(capacity <= ${NAMESPACE}_MAX_ELEMENTS_$max_bits);
    return 0;
 }
+## }
 
+=head2 custom_rbhash_delete_impl
+
+  int my_compare(..., size_t node_id);
+  
+  my_element* my_container_delete(my_container *c, char *k, void *v) {
+    void *rbhash= ...;
+    size_t capacity= ...;
+    size_t bucket_idx= ...;
+    size_t node_id;
+    
+    ${{ $rbhash->custom_rbhash_find_impl(
+      compare => "strcmp(k, c->elements[$node_id-1].name)",
+    ) }}
+    return node_id? my_container_get_element(c, node_id) : NULL;
+  }
+
+This method declares the body of a search function, allowing you to inline your comparison
+function and possibly avoid passing lots of parameters into it, for increased speed.
+
+=cut
+
+## sub custom_rbhash_delete_impl(%options) {
 /* Find and delete a node in the hashtable.  If found, this returns the node_id
  * that was removed.  If not found (or if the data structure is currupt) this
  * returns 0.  It may also return 0 if an assertion fails and you have disabled
@@ -995,47 +1130,7 @@ extern size_t ${search_ns}_delete(
    $assert(capacity <= ${NAMESPACE}_MAX_ELEMENTS_${max_bits});
    return 0;
 }
-
-##    section $orig_section;
-## } # end define_search_api
-##
-## define_search_api(
-##    api_args => \@default_search_args,
-##    cmp      => $default_search_cmp,
-## );
-
-/* Find a node in the hash table, and record the path to arrive at the node
- * or the node pointer where it would exist.  The path can be used for
- * inserting or deleting without re-comparing any elements.
- *
- * The path should already have been initialized using `${namespace}_path_init`.
- */
-size_t ${search_ns}_find_path(${namespace}_path *path, @search_args) {
-   size_t ref, node_id= 0;
-   int cmp, p_i= 0, p_lim= path->lim;
-   $assert(p_lim > 0);
-## for my $bits (@bits) {
-##   my $word_t= word_type($bits);
-##   my $else= $bits > $min_bits? ' else':'';
-  $else if (capacity <= ${NAMESPACE}_MAX_ELEMENTS_$bits) {
-      $word_t *rbhash_w= ($word_t*) rbhash;
-      path->refs[0]= ${NAMESPACE}_TABLE_WORD_OFS(capacity) + bucket_idx;
-      node_id= rbhash_w[ path->refs[0] ] >> 1;
-      while (node_id && (cmp= $search_cmp)) {
-         ref= (node_id<<1) | (cmp < 0? 0 : 1);
-         ++p_i;
-         $assert(p_i < p_lim);
-         path->refs[p_i]= ref;
-         node_id= rbhash_w[ref] >> 1;
-      }
-   }
 ## }
-   else {
-      $assert(capacity <= ${NAMESPACE}_MAX_ELEMENTS_$max_bits);
-   }
-   path->len= p_i+1;
-   return node_id;
-}
 
 ## if ($feature_print) {
 ##   section PUBLIC;
